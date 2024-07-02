@@ -1,0 +1,2 @@
+# vrmc
+MediapipeでモーションキャプチャしてVRMを動かす
