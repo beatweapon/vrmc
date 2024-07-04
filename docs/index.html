@@ -142,11 +142,6 @@
       const animate = () => {
         requestAnimationFrame(animate);
 
-        // update vrm components
-        if (currentVrm) {
-          currentVrm.update(clock.getDelta());
-        }
-
         // render
         renderer.render(scene, camera);
       };
