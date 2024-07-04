@@ -78,40 +78,49 @@
         return new VRMLoaderPlugin(parser);
       });
 
-      loader.load(
-        "./models/VRM1_Constraint_Twist_Sample.vrm",
+      const load = (url) => {
+        loader.load(
+          url,
 
-        (gltf) => {
-          const vrm = gltf.userData.vrm;
+          (gltf) => {
+            const vrm = gltf.userData.vrm;
 
-          // calling these functions greatly improves the performance
-          VRMUtils.removeUnnecessaryVertices(gltf.scene);
-          VRMUtils.removeUnnecessaryJoints(gltf.scene);
+            // calling these functions greatly improves the performance
+            VRMUtils.removeUnnecessaryVertices(gltf.scene);
+            VRMUtils.removeUnnecessaryJoints(gltf.scene);
 
-          // Disable frustum culling
-          vrm.scene.traverse((obj) => {
-            obj.frustumCulled = false;
-          });
+            if (currentVrm) {
+              scene.remove(currentVrm.scene);
+              VRMUtils.deepDispose(currentVrm.scene);
+            }
 
-          adjustArmsToIPose(vrm);
-          vrm.lookAt.target = lookAtTarget;
-          vrm.update(0);
+            // Disable frustum culling
+            vrm.scene.traverse((obj) => {
+              obj.frustumCulled = false;
+            });
 
-          scene.add(vrm.scene);
+            adjustArmsToIPose(vrm);
+            vrm.lookAt.target = lookAtTarget;
+            vrm.update(0);
 
-          currentVrm = vrm;
-          console.log(vrm);
-        },
+            currentVrm = vrm;
+            scene.add(vrm.scene);
 
-        (progress) =>
-          console.log(
-            "Loading model...",
-            100.0 * (progress.loaded / progress.total),
-            "%",
-          ),
+            console.log(vrm);
+          },
 
-        (error) => console.error(error),
-      );
+          (progress) =>
+            console.log(
+              "Loading model...",
+              100.0 * (progress.loaded / progress.total),
+              "%",
+            ),
+
+          (error) => console.error(error),
+        );
+      };
+
+      load("./models/VRM1_Constraint_Twist_Sample.vrm");
 
       // Adjust arms to I-pose function
       const adjustArmsToIPose = (vrm) => {
@@ -368,6 +377,30 @@
 
       animate();
       loadMediapipeModel();
+
+      // dnd handler
+      window.addEventListener("dragover", function (event) {
+        event.preventDefault();
+      });
+
+      window.addEventListener("drop", function (event) {
+        event.preventDefault();
+
+        // read given file then convert it to blob url
+        const files = event.dataTransfer.files;
+        if (!files) {
+          return;
+        }
+
+        const file = files[0];
+        if (!file) {
+          return;
+        }
+
+        const blob = new Blob([file], { type: "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        load(url);
+      });
     </script>
 
     <video autoplay playsinline id="video"><track kind="captions" /></video>
