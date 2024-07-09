@@ -283,6 +283,8 @@
       };
 
       const updateFacial = (blendshapes) => {
+        currentVrm.expressionManager.setValue("neutral", 0);
+
         const browInnerUp = blendshapes.get("browInnerUp");
         if (browInnerUp > 0.7) {
           currentVrm.expressionManager.setValue("surprised", browInnerUp);
@@ -303,6 +305,17 @@
         } else {
           currentVrm.expressionManager.setValue("happy", 0);
         }
+
+        currentVrm.expressionManager.setValue(
+          "neutral",
+          0.5 -
+            Math.max(
+              currentVrm.expressionManager.getValue("aa"),
+              currentVrm.expressionManager.getValue("ee"),
+              currentVrm.expressionManager.getValue("ou"),
+              currentVrm.expressionManager.getValue("oh"),
+            ),
+        );
       };
 
       const retarget = (blendshapes) => {
