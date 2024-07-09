@@ -203,25 +203,55 @@
       };
 
       const updateBlendshapes = (blendshapes) => {
-        updateFacial(blendshapes);
+        updateFace(blendshapes);
 
         const deltaTime = clock.getDelta();
 
         currentVrm.update(deltaTime);
       };
 
-      const updateFacial = (blendshapes) => {
+      const updateFace = (blendshapes) => {
         if (!currentVrm) {
           return;
         }
 
+        updateBlink(blendshapes);
+        updateEye(blendshapes);
+        updateMouth(blendshapes);
+        updateFacial(blendshapes);
+      };
+
+      const updateEye = (blendshapes) => {
+        const rightEyeLookRight =
+          (blendshapes.get("eyeLookOutRight") || 0) -
+          (blendshapes.get("eyeLookInRight") || 0);
+        const leftEyeLookRight =
+          (blendshapes.get("eyeLookInLeft") || 0) -
+          (blendshapes.get("eyeLookOutLeft") || 0);
+
+        const rightEyeLookUp =
+          (blendshapes.get("eyeLookUpRight") || 0) -
+          (blendshapes.get("eyeLookDownRight") || 0);
+        const leftEyeLookUp =
+          (blendshapes.get("eyeLookUpLeft") || 0) -
+          (blendshapes.get("eyeLookDownLeft") || 0);
+
+        lookAtTarget.position.x =
+          (10 * (rightEyeLookRight + leftEyeLookRight)) / 2;
+        lookAtTarget.position.y =
+          1.7 + (10 * (rightEyeLookUp + leftEyeLookUp)) / 2;
+      };
+
+      const updateBlink = (blendshapes) => {
         const blink = Math.max(
           blendshapes.get("eyeBlinkLeft"),
           blendshapes.get("eyeBlinkRight"),
         );
         currentVrm.expressionManager.setValue("blinkLeft", (blink - 0.5) * 2);
         currentVrm.expressionManager.setValue("blinkRight", (blink - 0.5) * 2);
+      };
 
+      const updateMouth = (blendshapes) => {
         const jawOpen = blendshapes.get("jawOpen");
         if (jawOpen > 0.3) {
           currentVrm.expressionManager.setValue("ee", 0);
@@ -250,7 +280,9 @@
         } else {
           currentVrm.expressionManager.setValue("oh", 0);
         }
+      };
 
+      const updateFacial = (blendshapes) => {
         const browInnerUp = blendshapes.get("browInnerUp");
         if (browInnerUp > 0.7) {
           currentVrm.expressionManager.setValue("surprised", browInnerUp);
@@ -271,25 +303,6 @@
         } else {
           currentVrm.expressionManager.setValue("happy", 0);
         }
-
-        const rightEyeLookRight =
-          (blendshapes.get("eyeLookOutRight") || 0) -
-          (blendshapes.get("eyeLookInRight") || 0);
-        const leftEyeLookRight =
-          (blendshapes.get("eyeLookInLeft") || 0) -
-          (blendshapes.get("eyeLookOutLeft") || 0);
-
-        const rightEyeLookUp =
-          (blendshapes.get("eyeLookUpRight") || 0) -
-          (blendshapes.get("eyeLookDownRight") || 0);
-        const leftEyeLookUp =
-          (blendshapes.get("eyeLookUpLeft") || 0) -
-          (blendshapes.get("eyeLookDownLeft") || 0);
-
-        lookAtTarget.position.x =
-          (10 * (rightEyeLookRight + leftEyeLookRight)) / 2;
-        lookAtTarget.position.y =
-          1.7 + (10 * (rightEyeLookUp + leftEyeLookUp)) / 2;
       };
 
       const retarget = (blendshapes) => {
