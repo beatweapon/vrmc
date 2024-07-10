@@ -406,11 +406,11 @@
       });
 
       // dnd handler
-      window.addEventListener("dragover", function (event) {
+      window.addEventListener("dragover", (event) => {
         event.preventDefault();
       });
 
-      window.addEventListener("drop", function (event) {
+      window.addEventListener("drop", (event) => {
         event.preventDefault();
 
         // read given file then convert it to blob url
