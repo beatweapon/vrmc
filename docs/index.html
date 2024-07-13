@@ -1,5 +1,6 @@
 <html>
   <head>
+    <link rel="manifest" href="./manifest.json" />
     <title>vrmc</title>
     <style>
       body {
@@ -16,6 +17,11 @@
     </style>
   </head>
   <body>
+    <script>
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("./service-worker.js");
+      }
+    </script>
     <script type="importmap">
       {
         "imports": {
