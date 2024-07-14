@@ -210,7 +210,7 @@
         const blendshapes = landmarks.faceBlendshapes;
         if (blendshapes && blendshapes.length > 0) {
           const coefsMap = retarget(blendshapes);
-          updateBlendshapes(coefsMap);
+          updateBlendshapes(landmarks, coefsMap);
         }
       };
 
@@ -223,22 +223,22 @@
         );
       };
 
-      const updateBlendshapes = (blendshapes) => {
-        updateFace(blendshapes);
+      const updateBlendshapes = (landmarks, blendshapes) => {
+        updateFace(landmarks, blendshapes);
 
         const deltaTime = clock.getDelta();
 
         currentVrm.update(deltaTime);
       };
 
-      const updateFace = (blendshapes) => {
+      const updateFace = (landmarks, blendshapes) => {
         if (!currentVrm) {
           return;
         }
 
         updateBlink(blendshapes);
         updateEye(blendshapes);
-        updateMouth(blendshapes);
+        updateMouth(landmarks, blendshapes);
         updateFacial(blendshapes);
       };
 
@@ -272,18 +272,13 @@
         currentVrm.expressionManager.setValue("blinkRight", (blink - 0.5) * 2);
       };
 
-      const updateMouth = (blendshapes) => {
-        const jawOpen = blendshapes.get("jawOpen");
-        if (jawOpen > 0.3) {
-          currentVrm.expressionManager.setValue("ee", 0);
-          currentVrm.expressionManager.setValue("aa", jawOpen);
-        } else if (jawOpen > 0.2) {
-          currentVrm.expressionManager.setValue("aa", 0);
-          currentVrm.expressionManager.setValue("ee", jawOpen);
-        } else {
-          currentVrm.expressionManager.setValue("aa", 0);
-          currentVrm.expressionManager.setValue("ee", 0);
-        }
+      const updateMouth = (landmarks, blendshapes) => {
+        const UPPER_LIP_BOTTOM_INDEX = 13;
+        const UNDER_LIP_TOP_INDEX = 14;
+        const mouthOpen =
+          landmarks.faceLandmarks[0][UPPER_LIP_BOTTOM_INDEX].y -
+          landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y;
+        currentVrm.expressionManager.setValue("aa", mouthOpen * -9);
 
         const mouthPucker = blendshapes.get("mouthPucker");
         const ou = (mouthPucker - 0.5) * 2;
