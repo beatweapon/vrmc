@@ -291,14 +291,14 @@
         const mouthOpen =
           landmarks.faceLandmarks[0][UPPER_LIP_BOTTOM_INDEX].y -
           landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y;
-        currentVrm.expressionManager.setValue("aa", mouthOpen * -9);
+        currentVrm.expressionManager.setValue("aa", mouthOpen * -10);
 
         const mouthPucker = blendshapes.get("mouthPucker");
         const ou = (mouthPucker - 0.5) * 2;
         if (ou > 0) {
           currentVrm.expressionManager.setValue("ou", ou);
-          currentVrm.expressionManager.setValue("ee", 0);
-          currentVrm.expressionManager.setValue("aa", 0);
+          // currentVrm.expressionManager.setValue("ee", 0);
+          // currentVrm.expressionManager.setValue("aa", 0);
         } else {
           currentVrm.expressionManager.setValue("ou", 0);
         }
