@@ -39,6 +39,12 @@
       import { OrbitControls } from "three/addons/controls/OrbitControls.js";
       import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
       import { FilesetResolver, FaceLandmarker } from "@mediapipe/tasks-vision";
+      import indexedDB from "./indexedDB.js";
+
+      const STORE_KEYS = {
+        BACK_GROUND_COLOR: "backGroundColor",
+        CURRENT_VRM: "currentVrm",
+      };
 
       // renderer
       const renderer = new THREE.WebGLRenderer();
@@ -63,7 +69,14 @@
 
       // scene
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x00ff00);
+      indexedDB
+        .loadData(STORE_KEYS.BACK_GROUND_COLOR)
+        .then((backGroundColor) => {
+          scene.background = new THREE.Color(backGroundColor);
+        })
+        .catch(() => {
+          scene.background = new THREE.Color(0x00ff00);
+        });
 
       // light
       const light = new THREE.AmbientLight(0xffffff, Math.PI);
@@ -411,12 +424,17 @@
 
       const backgroundColor = [0x00ff00, 0x0000ff, 0xff00ff];
       let backgroundColorIndex = 0;
-      window.addEventListener("click", () => {
+      window.addEventListener("click", async () => {
         backgroundColorIndex =
           backgroundColorIndex === backgroundColor.length - 1
             ? 0
             : backgroundColorIndex + 1;
         scene.background = new THREE.Color(
+          backgroundColor[backgroundColorIndex],
+        );
+
+        await indexedDB.saveData(
+          STORE_KEYS.BACK_GROUND_COLOR,
           backgroundColor[backgroundColorIndex],
         );
       });
@@ -443,80 +461,12 @@
         const blob = new Blob([file], { type: "application/octet-stream" });
         const url = URL.createObjectURL(blob);
         load(url);
-        saveFile("localdb", "keyValueStore", "currentVrm", file);
+        indexedDB.saveFile(STORE_KEYS.CURRENT_VRM, file);
       });
 
-      const saveFile = (dbName, storeName, id, file) => {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            const data = event.target.result;
-            openDatabase(dbName).then((db) => {
-              const transaction = db.transaction([storeName], "readwrite");
-              const store = transaction.objectStore(storeName);
-
-              const request = store.put({ id, data });
-
-              request.onsuccess = () => {
-                resolve();
-              };
-
-              request.onerror = (event) => {
-                reject(event.target.error);
-              };
-            });
-          };
-
-          reader.readAsArrayBuffer(file);
-        });
-      };
-
-      const loadFile = (dbName, storeName, id) => {
-        return new Promise((resolve, reject) => {
-          return openDatabase(dbName).then((db) => {
-            const transaction = db.transaction([storeName], "readonly");
-            const store = transaction.objectStore(storeName);
-            const request = store.get(id);
-
-            request.onsuccess = (event) => {
-              const fileData = event.target.result;
-              if (fileData) {
-                resolve(fileData.data);
-              } else {
-                reject("File not found");
-              }
-            };
-
-            request.onerror = (event) => {
-              reject(event.target.error);
-            };
-          });
-        });
-      };
-
-      const openDatabase = (db) => {
-        return new Promise((resolve, reject) => {
-          const request = indexedDB.open(db);
-
-          request.onupgradeneeded = (event) => {
-            const db = event.target.result;
-            if (!db.objectStoreNames.contains("keyValueStore")) {
-              db.createObjectStore("keyValueStore", { keyPath: "id" });
-            }
-          };
-
-          request.onsuccess = (event) => {
-            resolve(event.target.result);
-          };
-
-          request.onerror = (event) => {
-            reject(event.target.error);
-          };
-        });
-      };
-
       const start = async () => {
-        await loadFile("localdb", "keyValueStore", "currentVrm")
+        indexedDB
+          .loadData(STORE_KEYS.CURRENT_VRM)
           .then((file) => {
             const blob = new Blob([file], { type: "application/octet-stream" });
             const url = URL.createObjectURL(blob);
