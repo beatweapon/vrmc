@@ -289,9 +289,10 @@
         const UPPER_LIP_BOTTOM_INDEX = 13;
         const UNDER_LIP_TOP_INDEX = 14;
         const mouthOpen =
-          landmarks.faceLandmarks[0][UPPER_LIP_BOTTOM_INDEX].y -
-          landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y;
-        currentVrm.expressionManager.setValue("aa", mouthOpen * -10);
+          (landmarks.faceLandmarks[0][UPPER_LIP_BOTTOM_INDEX].y -
+            landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y) *
+          -1;
+        currentVrm.expressionManager.setValue("aa", mouthOpen * 20);
 
         const mouthPucker = blendshapes.get("mouthPucker");
         const ou = (mouthPucker - 0.5) * 2;
