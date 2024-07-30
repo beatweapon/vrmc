@@ -324,13 +324,11 @@
 
         const mouthSmileRight = blendshapes.get("mouthSmileRight");
         const mouthSmileLeft = blendshapes.get("mouthSmileLeft");
-        if ((mouthSmileRight || 0) + (mouthSmileLeft || 0) > 0.5) {
-          currentVrm.expressionManager.setValue("blinkLeft", 0);
-          currentVrm.expressionManager.setValue("blinkRight", 0);
-          currentVrm.expressionManager.setValue(
-            "happy",
-            mouthSmileRight + mouthSmileLeft,
-          );
+        const happy = (mouthSmileRight || 0) + (mouthSmileLeft || 0) - 0.8;
+        if (happy > 0) {
+          currentVrm.expressionManager.setValue("blinkLeft", happy * 4);
+          currentVrm.expressionManager.setValue("blinkRight", happy * 4);
+          // currentVrm.expressionManager.setValue("happy", happy);
           currentVrm.expressionManager.setValue("surprised", 0);
         } else {
           currentVrm.expressionManager.setValue("happy", 0);
