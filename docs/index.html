@@ -73,9 +73,15 @@
         .loadData(STORE_KEYS.BACK_GROUND_COLOR)
         .then((backGroundColor) => {
           scene.background = new THREE.Color(backGroundColor);
+          // 配列内のindexをセット
+          const index = backgroundColor.findIndex((c) => c === backGroundColor);
+          if (index !== -1) {
+            backgroundColorIndex = index;
+          }
         })
         .catch(() => {
           scene.background = new THREE.Color(0x00ff00);
+          backgroundColorIndex = 0;
         });
 
       // light
