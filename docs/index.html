@@ -425,15 +425,26 @@
         0x00ff00, 0x00ffff, 0x0000ff, 0xff00ff, 0xff0000, 0xffff00,
       ];
       let backgroundColorIndex = 0;
-      window.addEventListener("click", async () => {
-        backgroundColorIndex =
-          backgroundColorIndex === backgroundColor.length - 1
-            ? 0
-            : backgroundColorIndex + 1;
+
+      // Ctrl+左右矢印で背景色変更
+      window.addEventListener("keydown", async (event) => {
+        if (!event.ctrlKey) return;
+        if (event.key === "ArrowRight") {
+          backgroundColorIndex =
+            backgroundColorIndex === backgroundColor.length - 1
+              ? 0
+              : backgroundColorIndex + 1;
+        } else if (event.key === "ArrowLeft") {
+          backgroundColorIndex =
+            backgroundColorIndex === 0
+              ? backgroundColor.length - 1
+              : backgroundColorIndex - 1;
+        } else {
+          return;
+        }
         scene.background = new THREE.Color(
           backgroundColor[backgroundColorIndex],
         );
-
         await indexedDB.saveData(
           STORE_KEYS.BACK_GROUND_COLOR,
           backgroundColor[backgroundColorIndex],
