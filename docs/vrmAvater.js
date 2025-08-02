@@ -113,7 +113,6 @@ export class VRMAvatar {
 
     const transformationMatrices = landmarks.facialTransformationMatrixes;
 
-    console.log(transformationMatrices);
     if (!transformationMatrices?.length) return;
     const matrix = new THREE.Matrix4().fromArray(
       transformationMatrices[0].data,
@@ -156,7 +155,6 @@ export class VRMAvatar {
     if (!this.vrm) return;
 
     const blendshapes = landmarks.faceBlendshapes;
-    console.log(blendshapes);
     if (!blendshapes?.length) return;
 
     const coefsMap = this.retarget(blendshapes);
