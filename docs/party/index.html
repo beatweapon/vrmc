@@ -59,10 +59,9 @@
 
       // light
       const light = new THREE.AmbientLight(0xffffff, Math.PI);
-      light.position.set(1.0, 1.0, 1.0).normalize();
       scene.add(light);
 
-      // VRMAvatarの利用
+      // VRMアバター
       const myAvatar = new VRMAvatar(
         "../models/VRM1_Constraint_Twist_Sample.vrm",
         scene,
@@ -74,6 +73,7 @@
         { x: 0.5, y: 0, z: 0 },
       );
 
+      // カメラ初期化
       async function initCamera() {
         const video = document.getElementById("video");
         video.srcObject = await navigator.mediaDevices.getUserMedia({
@@ -82,22 +82,10 @@
         return new Promise((r) => (video.onloadedmetadata = () => r(video)));
       }
 
-      function calcHeadRotation(landmarks) {
-        const left = landmarks[33];
-        const right = landmarks[263];
-        const nose = landmarks[1];
-        const dx = right.x - left.x;
-        const dy = nose.y - (left.y + right.y) / 2;
-        return {
-          x: dy * 2,
-          y: dx * 4,
-          z: 0,
-        };
-      }
+      let myFaceResult = null;
+      let otherFaceResult = null;
 
-      const clock = new THREE.Clock();
-      clock.start();
-
+      // Mediapipeによる顔トラッキング開始
       async function startFaceTracking(video) {
         const filesetResolver = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm",
@@ -123,33 +111,47 @@
             performance.now(),
           );
 
-          console.log(result);
-
-          if (result.faceLandmarks && result.faceLandmarks.length > 0) {
-            const delta = clock.getDelta();
-
-            myAvatar.updateBlendshapes(result, delta);
-
-            socket.emit("motion", result);
+          if (result.faceLandmarks?.length > 0) {
+            myFaceResult = result; // 保存だけ
           }
+
           requestAnimationFrame(detect);
         }
         detect();
       }
 
-      socket.on("motion", (result) => {
-        const delta = clock.getDelta();
+      // WebSocket送信（30fps）
+      setInterval(() => {
+        if (myFaceResult) {
+          socket.emit("motion", myFaceResult);
+        }
+      }, 33);
 
-        otherAvatar.updateBlendshapes(result, delta);
+      // WebSocket受信
+      socket.on("motion", (result) => {
+        otherFaceResult = result; // 保存だけ
       });
 
-      initCamera().then((v) => startFaceTracking(v));
-
-      (function animate() {
+      // 描画ループ
+      const clock = new THREE.Clock();
+      function animate() {
         requestAnimationFrame(animate);
 
+        const delta = clock.getDelta();
+
+        if (myFaceResult) {
+          myAvatar.updateBlendshapes(myFaceResult, delta);
+        }
+        if (otherFaceResult) {
+          otherAvatar.updateBlendshapes(otherFaceResult, delta);
+        }
+
         renderer.render(scene, camera);
-      })();
+      }
+
+      // 実行
+      initCamera().then((v) => startFaceTracking(v));
+      animate();
     </script>
   </body>
 </html>
