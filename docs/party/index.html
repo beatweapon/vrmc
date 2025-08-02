@@ -82,8 +82,12 @@
         return new Promise((r) => (video.onloadedmetadata = () => r(video)));
       }
 
+      // Tracking variables
       let myFaceResult = null;
-      let otherFaceResult = null;
+      let prevOtherResult = null;
+      let nextOtherResult = null;
+      let interpolationStartTime = 0;
+      const interpolationDuration = 0.025; // 25ms
 
       // Mediapipeによる顔トラッキング開始
       async function startFaceTracking(video) {
@@ -112,7 +116,7 @@
           );
 
           if (result.faceLandmarks?.length > 0) {
-            myFaceResult = result; // 保存だけ
+            myFaceResult = result;
           }
 
           requestAnimationFrame(detect);
@@ -129,22 +133,82 @@
 
       // WebSocket受信
       socket.on("motion", (result) => {
-        otherFaceResult = result; // 保存だけ
+        prevOtherResult = nextOtherResult
+          ? structuredClone(nextOtherResult)
+          : structuredClone(result);
+        nextOtherResult = structuredClone(result);
+        interpolationStartTime = performance.now() / 1000;
       });
 
       // 描画ループ
+      const lerp = (a, b, t) => a + (b - a) * t;
+
+      // Interpolation
+      function interpolateResults(prev, next, alpha) {
+        if (!prev || !next) return next || prev;
+        const result = structuredClone(prev);
+
+        if (prev.faceLandmarks && next.faceLandmarks) {
+          for (let i = 0; i < prev.faceLandmarks[0].length; i++) {
+            result.faceLandmarks[0][i].x = lerp(
+              prev.faceLandmarks[0][i].x,
+              next.faceLandmarks[0][i].x,
+              alpha,
+            );
+            result.faceLandmarks[0][i].y = lerp(
+              prev.faceLandmarks[0][i].y,
+              next.faceLandmarks[0][i].y,
+              alpha,
+            );
+            result.faceLandmarks[0][i].z = lerp(
+              prev.faceLandmarks[0][i].z,
+              next.faceLandmarks[0][i].z,
+              alpha,
+            );
+          }
+        }
+
+        if (prev.faceBlendshapes && next.faceBlendshapes) {
+          const prevCats = prev.faceBlendshapes[0].categories;
+          const nextCats = next.faceBlendshapes[0].categories;
+          for (let i = 0; i < prevCats.length; i++) {
+            result.faceBlendshapes[0].categories[i].score = lerp(
+              prevCats[i].score,
+              nextCats[i].score,
+              alpha,
+            );
+          }
+        }
+
+        return result;
+      }
+
       const clock = new THREE.Clock();
       function animate() {
         requestAnimationFrame(animate);
 
         const delta = clock.getDelta();
 
-        if (myFaceResult) {
-          myAvatar.updateBlendshapes(myFaceResult, delta);
+        // Apply my face result
+        if (myFaceResult) myAvatar.updateBlendshapes(myFaceResult);
+
+        // Apply other face result (with interpolation)
+        if (prevOtherResult && nextOtherResult) {
+          const now = performance.now() / 1000;
+          const alpha = Math.min(
+            (now - interpolationStartTime) / interpolationDuration,
+            1,
+          );
+          const frameData =
+            alpha >= 1
+              ? nextOtherResult
+              : interpolateResults(prevOtherResult, nextOtherResult, alpha);
+          otherAvatar.updateBlendshapes(frameData);
         }
-        if (otherFaceResult) {
-          otherAvatar.updateBlendshapes(otherFaceResult, delta);
-        }
+
+        // Physics / LookAt update (once per frame for all avatars)
+        if (myAvatar.vrm) myAvatar.vrm.update(delta);
+        if (otherAvatar.vrm) otherAvatar.vrm.update(delta);
 
         renderer.render(scene, camera);
       }

@@ -80,12 +80,11 @@ export class VRMAvatar {
     if (rightUpperArm) rightUpperArm.rotation.z = Math.PI / 2.5;
   }
 
-  updateBlendshapes(landmarks, deltaTime) {
+  updateBlendshapes(landmarks) {
     if (!this.vrm) return;
     this.updateHeadRotation(landmarks);
 
     this.updateFace(landmarks);
-    this.vrm.update(deltaTime);
   }
 
   retarget(blendshapes) {
