@@ -9,6 +9,7 @@ import { MToonNodeMaterial } from "@pixiv/three-vrm/nodes";
 
 export class VRMAvatar {
   constructor(url, scene, position) {
+    console.log({ url, scene, position });
     this.scene = scene;
     this.lookAtTarget = new THREE.Object3D();
     this.lookAtTarget.position.z = 10;
@@ -33,10 +34,13 @@ export class VRMAvatar {
       return new VRMLoaderPlugin(parser, mtoonMaterialPlugin);
     });
 
+    console.log(url);
+
     loader.load(
       url,
       (gltf) => {
         const vrm = gltf.userData.vrm;
+        console.log("gltf.userData", gltf.userData);
         VRMUtils.removeUnnecessaryVertices(gltf.scene);
         VRMUtils.combineSkeletons(gltf.scene);
 

@@ -38,7 +38,24 @@
     <script type="module">
       import * as THREE from "three";
       import * as vision from "@mediapipe/tasks-vision";
-      import { VRMAvatar } from "../vrmAvater.js";
+      import { VRMAvatar } from "../vrmAvatar.js";
+      import { createIndexedDB } from "./indexedDB.js";
+
+      const DB_NAME = "vrmc";
+      const STORE_NAME = "vrm";
+      const db = createIndexedDB(DB_NAME, STORE_NAME);
+
+      // 固定ユーザーIDを取得（なければ作る）
+      const getUserId = () => {
+        let id = localStorage.getItem("userId");
+        if (!id) {
+          id = crypto.randomUUID();
+          localStorage.setItem("userId", id);
+        }
+        return id;
+      };
+
+      const userId = getUserId();
 
       const { FaceLandmarker, FilesetResolver } = vision;
 
@@ -61,9 +78,15 @@
       const light = new THREE.AmbientLight(0xffffff, Math.PI);
       scene.add(light);
 
+      const myAvatarModel = await db.loadData(userId);
+      const blob = new Blob([myAvatarModel], {
+        type: "application/octet-stream",
+      });
+      const url = URL.createObjectURL(blob);
+
       // VRMアバター
       const myAvatar = new VRMAvatar(
-        "../models/VRM1_Constraint_Twist_Sample.vrm",
+        url ? url : "../models/VRM1_Constraint_Twist_Sample.vrm",
         scene,
         { x: -0.5, y: 0, z: 0 },
       );
@@ -72,6 +95,30 @@
         scene,
         { x: 0.5, y: 0, z: 0 },
       );
+
+      // ドラッグ＆ドロップ対応
+      document.addEventListener("dragover", (e) => e.preventDefault());
+      document.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (!file.name.endsWith(".vrm")) {
+          alert("VRMファイルをドロップしてください");
+          return;
+        }
+
+        const arrayBuffer = await file.arrayBuffer();
+        console.log("圧縮中...");
+
+        console.log("IndexedDBに保存中...");
+        await db.saveData(userId, arrayBuffer);
+
+        const blob = new Blob([arrayBuffer], {
+          type: "application/octet-stream",
+        });
+        const url = URL.createObjectURL(blob);
+
+        await myAvatar.changeModel(url);
+      });
 
       // カメラ初期化
       async function initCamera() {
