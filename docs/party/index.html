@@ -45,7 +45,7 @@
       const STORE_NAME = "vrm";
       const db = createIndexedDB(DB_NAME, STORE_NAME);
 
-      // 固定ユーザーIDを取得（なければ作る）
+      // 固定ユーザーID
       const getUserId = () => {
         let id = localStorage.getItem("userId");
         if (!id) {
@@ -54,14 +54,37 @@
         }
         return id;
       };
-
       const userId = getUserId();
 
       const { FaceLandmarker, FilesetResolver } = vision;
+      const SERVER_URL = "ws://localhost:3001"; // モーション同期用WS
 
-      const SERVER_URL = "https://63d00d9d6f23.ngrok-free.app";
-      const socket = io(SERVER_URL, { transports: ["websocket"] });
+      // ===== 共通再接続WS =====
+      function connectWebSocket(url, onOpen, onMessage) {
+        let ws;
+        let reconnectTimeout = 1000;
 
+        function init() {
+          ws = new WebSocket(`${url}?userId=${userId}`);
+          ws.binaryType = "arraybuffer";
+
+          ws.onopen = () => {
+            console.log("Connected:", url);
+            reconnectTimeout = 1000;
+            onOpen(ws);
+          };
+          ws.onmessage = (e) => onMessage(e.data, ws);
+          ws.onclose = () => {
+            console.warn("Disconnected. Reconnecting...");
+            setTimeout(init, reconnectTimeout);
+            reconnectTimeout = Math.min(reconnectTimeout * 2, 10000);
+          };
+          ws.onerror = () => ws.close();
+        }
+        init();
+      }
+
+      // ===== Three.js シーン設定 =====
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(
         30,
@@ -74,19 +97,18 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
       document.body.appendChild(renderer.domElement);
 
-      // light
+      // Light
       const light = new THREE.AmbientLight(0xffffff, Math.PI);
       scene.add(light);
 
+      // 自分のアバター
       const myAvatarModel = await db.loadData(userId);
       const blob = new Blob([myAvatarModel], {
         type: "application/octet-stream",
       });
-      const url = URL.createObjectURL(blob);
-
-      // VRMアバター
+      const myUrl = URL.createObjectURL(blob);
       const myAvatar = new VRMAvatar(
-        url ? url : "../models/VRM1_Constraint_Twist_Sample.vrm",
+        myUrl || "../models/VRM1_Constraint_Twist_Sample.vrm",
         scene,
         { x: -0.5, y: 0, z: 0 },
       );
@@ -96,47 +118,26 @@
         { x: 0.5, y: 0, z: 0 },
       );
 
-      // ドラッグ＆ドロップ対応
-      document.addEventListener("dragover", (e) => e.preventDefault());
-      document.addEventListener("drop", async (e) => {
-        e.preventDefault();
-        const file = e.dataTransfer.files[0];
-        if (!file.name.endsWith(".vrm")) {
-          alert("VRMファイルをドロップしてください");
-          return;
-        }
+      // ===== Mediapipe設定 =====
+      const video = document.createElement("video");
+      video.autoplay = true;
+      video.playsInline = true;
+      video.style.display = "none";
+      document.body.appendChild(video);
 
-        const arrayBuffer = await file.arrayBuffer();
-        console.log("圧縮中...");
-
-        console.log("IndexedDBに保存中...");
-        await db.saveData(userId, arrayBuffer);
-
-        const blob = new Blob([arrayBuffer], {
-          type: "application/octet-stream",
-        });
-        const url = URL.createObjectURL(blob);
-
-        await myAvatar.changeModel(url);
-      });
-
-      // カメラ初期化
       async function initCamera() {
-        const video = document.getElementById("video");
         video.srcObject = await navigator.mediaDevices.getUserMedia({
           video: true,
         });
         return new Promise((r) => (video.onloadedmetadata = () => r(video)));
       }
 
-      // Tracking variables
       let myFaceResult = null;
       let prevOtherResult = null;
       let nextOtherResult = null;
       let interpolationStartTime = 0;
-      const interpolationDuration = 0.05; // 50ms
+      const interpolationDuration = 0.05;
 
-      // Mediapipeによる顔トラッキング開始
       async function startFaceTracking(video) {
         const filesetResolver = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm",
@@ -161,36 +162,46 @@
             video,
             performance.now(),
           );
-
-          if (result.faceLandmarks?.length > 0) {
-            myFaceResult = result;
-          }
-
+          if (result.faceLandmarks?.length > 0) myFaceResult = result;
           requestAnimationFrame(detect);
         }
         detect();
       }
 
-      // WebSocket送信（30fps）
+      // ===== WebSocket接続 =====
+      let motionWS;
+      connectWebSocket(
+        SERVER_URL,
+        (ws) => {
+          motionWS = ws;
+        },
+        (data) => {
+          const msg = JSON.parse(data);
+          if (msg.type === "motion" && msg.id !== userId) {
+            prevOtherResult = nextOtherResult
+              ? structuredClone(nextOtherResult)
+              : structuredClone(msg.data);
+            nextOtherResult = structuredClone(msg.data);
+            interpolationStartTime = performance.now() / 1000;
+          }
+        },
+      );
+
+      // ===== モーション送信（30fps） =====
       setInterval(() => {
-        if (myFaceResult) {
-          socket.emit("motion", myFaceResult);
+        if (myFaceResult && motionWS?.readyState === WebSocket.OPEN) {
+          motionWS.send(
+            JSON.stringify({
+              type: "motion",
+              id: userId,
+              data: myFaceResult,
+            }),
+          );
         }
       }, 33);
 
-      // WebSocket受信
-      socket.on("motion", (result) => {
-        prevOtherResult = nextOtherResult
-          ? structuredClone(nextOtherResult)
-          : structuredClone(result);
-        nextOtherResult = structuredClone(result);
-        interpolationStartTime = performance.now() / 1000;
-      });
-
-      // 描画ループ
+      // ===== 補間処理 =====
       const lerp = (a, b, t) => a + (b - a) * t;
-
-      // Interpolation
       function interpolateResults(prev, next, alpha) {
         if (!prev || !next) return next || prev;
         const result = structuredClone(prev);
@@ -226,20 +237,17 @@
             );
           }
         }
-
         return result;
       }
 
+      // ===== 描画ループ =====
       const clock = new THREE.Clock();
       function animate() {
         requestAnimationFrame(animate);
-
         const delta = clock.getDelta();
 
-        // Apply my face result
         if (myFaceResult) myAvatar.updateBlendshapes(myFaceResult);
 
-        // Apply other face result (with interpolation)
         if (prevOtherResult && nextOtherResult) {
           const now = performance.now() / 1000;
           const alpha = Math.min(
@@ -253,14 +261,12 @@
           otherAvatar.updateBlendshapes(frameData);
         }
 
-        // Physics / LookAt update (once per frame for all avatars)
         if (myAvatar.vrm) myAvatar.vrm.update(delta);
         if (otherAvatar.vrm) otherAvatar.vrm.update(delta);
 
         renderer.render(scene, camera);
       }
 
-      // 実行
       initCamera().then((v) => startFaceTracking(v));
       animate();
     </script>
