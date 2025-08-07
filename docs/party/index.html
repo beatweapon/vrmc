@@ -168,6 +168,17 @@
       initCamera().then((v) => startFaceTracking(v));
       animate();
     </script>
+    <div
+      id="avatar-ui-container"
+      style="
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        z-index: 10;
+        color: white;
+        font-family: sans-serif;
+      "
+    ></div>
     <video id="video" autoplay playsinline></video>
   </body>
 </html>
