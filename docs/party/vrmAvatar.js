@@ -307,26 +307,25 @@ export class VRMAvatar {
     const neckBone = this.vrm.humanoid.getNormalizedBoneNode("neck");
     const headBone = this.vrm.humanoid.getNormalizedBoneNode("head");
 
-    spineBone.quaternion.slerp(
-      adjustQuaternionAngleRatio(baseRotationQuat, 0.1),
-      0.3,
-    );
+    const segments = 5; // spine, chest, upperChest, neck, head
+    const distributedQuats = [];
 
-    chestBone.quaternion
-      .copy(spineBone.quaternion)
-      .multiply(adjustQuaternionAngleRatio(baseRotationQuat, 0.1));
+    for (let i = 1; i <= segments; i++) {
+      const q = new THREE.Quaternion().slerpQuaternions(
+        new THREE.Quaternion(), // identity
+        baseRotationQuat, // full target rotation
+        i / segments, // i段階目までの累積回転
+      );
+      distributedQuats.push(q);
+    }
 
-    upperChestBone.quaternion
-      .copy(chestBone.quaternion)
-      .multiply(adjustQuaternionAngleRatio(baseRotationQuat, 0.2));
+    const slerpFactor = 0.5; // 各ボーンの回転を補間する係数
 
-    neckBone.quaternion
-      .copy(spineBone.quaternion)
-      .multiply(adjustQuaternionAngleRatio(baseRotationQuat, 0.3));
-
-    headBone.quaternion
-      .copy(neckBone.quaternion)
-      .multiply(adjustQuaternionAngleRatio(baseRotationQuat, 0.4));
+    spineBone.quaternion.slerp(distributedQuats[0], slerpFactor);
+    chestBone.quaternion.slerp(distributedQuats[1], slerpFactor);
+    upperChestBone.quaternion.slerp(distributedQuats[2], slerpFactor);
+    neckBone.quaternion.slerp(distributedQuats[3], slerpFactor);
+    headBone.quaternion.slerp(distributedQuats[4], slerpFactor);
   }
 
   updateEye({ rotX, rotY }) {
@@ -338,12 +337,14 @@ export class VRMAvatar {
   }
 
   updateBlink(blink) {
+    if (!this.vrm) return;
     this.vrm.expressionManager.setValue("blinkLeft", (blink - 0.5) * 2);
     this.vrm.expressionManager.setValue("blinkRight", (blink - 0.5) * 2);
   }
 
   // 口の動き（口の開閉量を直接渡す）
   updateMouth(mouth) {
+    if (!this.vrm) return;
     this.vrm.expressionManager.setValue("aa", mouth.aa);
     this.vrm.expressionManager.setValue("ih", mouth.ih);
     this.vrm.expressionManager.setValue("ou", mouth.ou);
@@ -351,6 +352,7 @@ export class VRMAvatar {
   }
 
   updateFacial({ browInnerUp, mouthSmileRight, mouthSmileLeft }) {
+    if (!this.vrm) return;
     this.vrm.expressionManager.setValue("neutral", 0);
 
     this.vrm.expressionManager.setValue(
