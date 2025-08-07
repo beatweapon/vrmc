@@ -84,7 +84,7 @@
             });
           }
         },
-        onReceiveVrm: async (userId, buffer) => {
+        onReceiveVrm: async (userId, arrayBuffer) => {
           console.log("Received VRM for user:", userId);
           await changeAvatar(userId, arrayBuffer);
         },
