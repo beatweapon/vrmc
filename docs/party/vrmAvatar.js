@@ -11,7 +11,6 @@ export class VRMAvatar {
   constructor(url, scene, position) {
     this.scene = scene;
     this.vrm = null;
-    this.headRotationQuat = null; // 頭回転の共通クォータニオン
     this.leftIris = null;
     this.rightIris = null;
 
@@ -99,14 +98,74 @@ export class VRMAvatar {
   updateBlendshapes(landmarks) {
     if (!this.vrm) return;
 
-    // 1. 頭回転の共通クォータニオンを計算
-    this.computeHeadRotation(landmarks);
+    // 全部位のblendshape計算をまとめて行う
+    const blendshapeData = this.calculateBlendshapes(landmarks);
 
-    // 2. 首回転を適用
-    this.updateHeadRotation();
+    // vrmへの適用を一括で行う
+    this.applyBlendshapes(blendshapeData);
+  }
 
-    // 3. 顔全体の表情を適用
-    this.updateFace(landmarks);
+  // 全部位のblendshape計算を行う
+  calculateBlendshapes(landmarks) {
+    // 頭の回転クォータニオン
+    const baseRotationQuat = this.computeHeadRotation(landmarks);
+
+    // blendshapes（表情係数）
+    let coefsMap = new Map();
+    if (landmarks.faceBlendshapes?.length) {
+      coefsMap = this.retarget(landmarks.faceBlendshapes);
+    }
+
+    // 口の開閉量
+    let mouthOpen = 0;
+    if (landmarks.faceLandmarks?.[0]) {
+      const UPPER_LIP_BOTTOM_INDEX = 13;
+      const UNDER_LIP_TOP_INDEX = 14;
+      mouthOpen =
+        (landmarks.faceLandmarks[0][UPPER_LIP_BOTTOM_INDEX].y -
+          landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y) *
+        -1;
+    }
+
+    return {
+      baseRotationQuat,
+      coefsMap,
+      mouthOpen,
+      landmarks,
+    };
+  }
+
+  // vrmへの適用を一括で行う
+  applyBlendshapes({ baseRotationQuat, coefsMap, mouthOpen }) {
+    // 首・頭回転を適用
+    this.updateHeadRotation(baseRotationQuat);
+
+    // 目の動き
+    this.updateEye(coefsMap);
+
+    // 瞬き
+    this.updateBlink(coefsMap);
+
+    // 口の動き
+    this.updateMouthWithOpen(mouthOpen, coefsMap);
+
+    // 顔全体の表情
+    this.updateFacial(coefsMap);
+  }
+
+  // 口の動き（口の開閉量を直接渡す）
+  updateMouthWithOpen(mouthOpen, blendshapes) {
+    this.vrm.expressionManager.setValue("aa", mouthOpen * 20);
+
+    const mouthPucker = blendshapes.get("mouthPucker");
+    const ou = (mouthPucker - 0.5) * 2;
+    this.vrm.expressionManager.setValue("ou", ou > 0 ? ou : 0);
+
+    const mouthFunnel = blendshapes.get("mouthFunnel");
+    this.vrm.expressionManager.setValue(
+      "oh",
+      mouthFunnel > 0.2 ? mouthFunnel : 0,
+    );
   }
 
   retarget(blendshapes) {
@@ -128,7 +187,8 @@ export class VRMAvatar {
 
   computeHeadRotation(landmarks) {
     const transformationMatrices = landmarks.facialTransformationMatrixes;
-    if (!transformationMatrices?.length) return;
+    if (!transformationMatrices?.length)
+      return { spineRotationQuat: null, neckRotationQuat: null };
 
     const matrix = new THREE.Matrix4().fromArray(
       transformationMatrices[0].data,
@@ -137,7 +197,7 @@ export class VRMAvatar {
       matrix,
     );
 
-    this.headRotationQuat = new THREE.Quaternion(
+    const baseRotationQuat = new THREE.Quaternion(
       originalQuaternion.x > 0
         ? originalQuaternion.x
         : originalQuaternion.x * 0.3,
@@ -145,15 +205,16 @@ export class VRMAvatar {
       -originalQuaternion.z,
       originalQuaternion.w,
     );
+
+    return baseRotationQuat;
   }
 
-  updateHeadRotation() {
-    if (!this.vrm || !this.headRotationQuat) return;
-
-    const spineBone = this.vrm.humanoid.getNormalizedBoneNode("spine");
-    const neckBone = this.vrm.humanoid.getNormalizedBoneNode("neck");
+  // headRotationQuatを引数で受け取る
+  updateHeadRotation(baseRotationQuat) {
+    if (!this.vrm || !baseRotationQuat) return;
 
     const adjustQuaternionAngleRatio = (quaternion, ratio) => {
+      console.log(quaternion, ratio);
       return new THREE.Quaternion(
         quaternion.x * ratio,
         quaternion.y * ratio,
@@ -162,13 +223,33 @@ export class VRMAvatar {
       );
     };
 
+    const spineBone = this.vrm.humanoid.getNormalizedBoneNode("spine");
+    const chestBone = this.vrm.humanoid.getNormalizedBoneNode("chest");
+    const upperChestBone =
+      this.vrm.humanoid.getNormalizedBoneNode("upperChest");
+    const neckBone = this.vrm.humanoid.getNormalizedBoneNode("neck");
+    const headBone = this.vrm.humanoid.getNormalizedBoneNode("head");
+
     spineBone.quaternion.slerp(
-      adjustQuaternionAngleRatio(this.headRotationQuat, 0.6),
+      adjustQuaternionAngleRatio(baseRotationQuat, 0.1),
       0.3,
     );
+
+    chestBone.quaternion
+      .copy(spineBone.quaternion)
+      .multiply(adjustQuaternionAngleRatio(baseRotationQuat, 0.1));
+
+    upperChestBone.quaternion
+      .copy(chestBone.quaternion)
+      .multiply(adjustQuaternionAngleRatio(baseRotationQuat, 0.2));
+
     neckBone.quaternion
       .copy(spineBone.quaternion)
-      .multiply(adjustQuaternionAngleRatio(this.headRotationQuat, 0.2));
+      .multiply(adjustQuaternionAngleRatio(baseRotationQuat, 0.3));
+
+    headBone.quaternion
+      .copy(neckBone.quaternion)
+      .multiply(adjustQuaternionAngleRatio(baseRotationQuat, 0.4));
   }
 
   updateFace(landmarks) {
