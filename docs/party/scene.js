@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 let scene, clock, camera, renderer;
 
@@ -15,6 +16,12 @@ export const initScene = () => {
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
+  // camera controls
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.screenSpacePanning = true;
+  controls.target.set(0.0, 1.5, 0.0);
+  controls.update();
+
   document.body.appendChild(renderer.domElement);
 
   scene.add(new THREE.AmbientLight(0xffffff, Math.PI));
