@@ -36,6 +36,7 @@
       import { initScene } from "./scene.js";
       import {
         loadAvatar,
+        calculateBlendshapes,
         updateBlendshape,
         changeAvatar,
         updateAvatars,
@@ -93,7 +94,8 @@
             performance.now(),
           );
           if (result.faceLandmarks?.length > 0) {
-            updateBlendshape(userId, result);
+            const blendshapeData = calculateBlendshapes(userId, result);
+            if (blendshapeData) updateBlendshape(userId, blendshapeData);
           }
           requestAnimationFrame(detect);
         };

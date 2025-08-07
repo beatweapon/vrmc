@@ -18,9 +18,15 @@ export const loadAvatar = async (userId, scene) => {
   avatars[userId] = new VRMAvatar(url, scene, position);
 };
 
-export const updateBlendshape = (userId, landmarks) => {
+export const calculateBlendshapes = (userId, landmarks) => {
   if (avatars[userId]) {
-    avatars[userId].updateBlendshapes(landmarks);
+    return avatars[userId].calculateBlendshapes(landmarks);
+  }
+};
+
+export const updateBlendshape = (userId, blendshapeData) => {
+  if (avatars[userId]) {
+    avatars[userId].applyBlendshapes(blendshapeData);
   }
 };
 

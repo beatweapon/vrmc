@@ -116,41 +116,21 @@ export class VRMAvatar {
       coefsMap = this.retarget(landmarks.faceBlendshapes);
     }
 
-    const mouth = this.computedMouth(landmarks);
+    const eye = this.computedEye(coefsMap);
+
+    const blink = this.computedBlink(coefsMap);
+
+    const mouth = this.computedMouth(landmarks, coefsMap);
+
+    const facial = this.computedFacial(coefsMap);
 
     return {
       baseRotationQuat,
-      coefsMap,
+      eye,
+      blink,
       mouth,
-      landmarks,
+      facial,
     };
-  }
-
-  // vrmへの適用を一括で行う
-  applyBlendshapes({ baseRotationQuat, coefsMap, mouth }) {
-    // 首・頭回転を適用
-    this.updateHeadRotation(baseRotationQuat);
-
-    // 目の動き
-    this.updateEye(coefsMap);
-
-    // 瞬き
-    this.updateBlink(coefsMap);
-
-    // 口の動き
-    // mouthオブジェクトを受け取る形に変更
-    this.updateMouthWithOpen(mouth);
-
-    // 顔全体の表情
-    this.updateFacial(coefsMap);
-  }
-
-  // 口の動き（口の開閉量を直接渡す）
-  updateMouthWithOpen(mouth) {
-    this.vrm.expressionManager.setValue("aa", mouth.aa);
-    this.vrm.expressionManager.setValue("ih", mouth.ih);
-    this.vrm.expressionManager.setValue("ou", mouth.ou);
-    this.vrm.expressionManager.setValue("oh", mouth.oh);
   }
 
   retarget(blendshapes) {
@@ -194,7 +174,51 @@ export class VRMAvatar {
     return baseRotationQuat;
   }
 
-  computedMouth(landmarks) {
+  computedBlink(blendshapes) {
+    return Math.max(
+      blendshapes.get("eyeBlinkLeft"),
+      blendshapes.get("eyeBlinkRight"),
+    );
+  }
+
+  computedEye(blendshapes) {
+    // Mediapipe視線の左右・上下成分（頭基準）
+    const lookRight =
+      ((blendshapes.get("eyeLookOutRight") || 0) -
+        (blendshapes.get("eyeLookInRight") || 0) +
+        (blendshapes.get("eyeLookInLeft") || 0) -
+        (blendshapes.get("eyeLookOutLeft") || 0)) /
+      2;
+
+    const lookUp =
+      ((blendshapes.get("eyeLookUpRight") || 0) -
+        (blendshapes.get("eyeLookDownRight") || 0) +
+        (blendshapes.get("eyeLookUpLeft") || 0) -
+        (blendshapes.get("eyeLookDownLeft") || 0)) /
+      2;
+
+    // ★ 符号反転
+    const invLookRight = -lookRight; // 左右反転
+    const invLookUp = -lookUp; // 上下反転
+
+    // スケーリング（動きすぎ防止）
+    const scaleFactor = 0.7;
+
+    // 上下・左右の最大角度（自然な可動範囲）
+    const maxRotUp = THREE.MathUtils.degToRad(15);
+    const maxRotDown = THREE.MathUtils.degToRad(12);
+    const maxRotSide = THREE.MathUtils.degToRad(17);
+
+    // clampして回転角に変換
+    const upDown = THREE.MathUtils.clamp(invLookUp * scaleFactor, -1, 1);
+    const rotX = upDown > 0 ? upDown * maxRotUp : upDown * maxRotDown;
+    const rotY =
+      -THREE.MathUtils.clamp(invLookRight * scaleFactor, -1, 1) * maxRotSide;
+
+    return { rotX, rotY };
+  }
+
+  computedMouth(landmarks, coefsMap) {
     // 口の開閉量
     let mouthOpen = 0;
     if (landmarks.faceLandmarks?.[0]) {
@@ -205,8 +229,6 @@ export class VRMAvatar {
           landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y) *
         -1;
     }
-
-    const coefsMap = this.retarget(landmarks.faceBlendshapes || []);
 
     // mouthPucker, mouthFunnel
     const mouthPucker = coefsMap.get("mouthPucker") || 0;
@@ -235,11 +257,41 @@ export class VRMAvatar {
     return mouth;
   }
 
+  computedFacial(blendshapes) {
+    const browInnerUp = blendshapes.get("browInnerUp");
+    const mouthSmileRight = blendshapes.get("mouthSmileRight");
+    const mouthSmileLeft = blendshapes.get("mouthSmileLeft");
+
+    return {
+      browInnerUp,
+      mouthSmileRight,
+      mouthSmileLeft,
+    };
+  }
+
+  // vrmへの適用を一括で行う
+  applyBlendshapes({ baseRotationQuat, eye, blink, mouth, facial }) {
+    // 首・頭回転を適用
+    this.updateHeadRotation(baseRotationQuat);
+
+    // 目の動き
+    this.updateEye(eye);
+
+    // 瞬き
+    this.updateBlink(blink);
+
+    // 口の動き
+    // mouthオブジェクトを受け取る形に変更
+    this.updateMouth(mouth);
+
+    // 顔全体の表情
+    this.updateFacial(facial);
+  }
+
   updateHeadRotation(baseRotationQuat) {
     if (!this.vrm || !baseRotationQuat) return;
 
     const adjustQuaternionAngleRatio = (quaternion, ratio) => {
-      console.log(quaternion, ratio);
       return new THREE.Quaternion(
         quaternion.x * ratio,
         quaternion.y * ratio,
@@ -277,101 +329,35 @@ export class VRMAvatar {
       .multiply(adjustQuaternionAngleRatio(baseRotationQuat, 0.4));
   }
 
-  updateFace(landmarks) {
-    if (!this.vrm) return;
-
-    const blendshapes = landmarks.faceBlendshapes;
-    if (!blendshapes?.length) return;
-
-    const coefsMap = this.retarget(blendshapes);
-
-    this.updateBlink(coefsMap);
-    this.updateEye(coefsMap);
-    this.updateMouth(landmarks, coefsMap);
-    this.updateFacial(coefsMap);
-  }
-
-  updateEye(blendshapes) {
+  updateEye({ rotX, rotY }) {
     if (!this.leftIris || !this.rightIris) return;
-
-    // Mediapipe視線の左右・上下成分（頭基準）
-    const lookRight =
-      ((blendshapes.get("eyeLookOutRight") || 0) -
-        (blendshapes.get("eyeLookInRight") || 0) +
-        (blendshapes.get("eyeLookInLeft") || 0) -
-        (blendshapes.get("eyeLookOutLeft") || 0)) /
-      2;
-
-    const lookUp =
-      ((blendshapes.get("eyeLookUpRight") || 0) -
-        (blendshapes.get("eyeLookDownRight") || 0) +
-        (blendshapes.get("eyeLookUpLeft") || 0) -
-        (blendshapes.get("eyeLookDownLeft") || 0)) /
-      2;
-
-    // ★ 符号反転
-    const invLookRight = -lookRight; // 左右反転
-    const invLookUp = -lookUp; // 上下反転
-
-    // スケーリング（動きすぎ防止）
-    const scaleFactor = 0.7;
-
-    // 上下・左右の最大角度（自然な可動範囲）
-    const maxRotUp = THREE.MathUtils.degToRad(15);
-    const maxRotDown = THREE.MathUtils.degToRad(12);
-    const maxRotSide = THREE.MathUtils.degToRad(17);
-
-    // clampして回転角に変換
-    const upDown = THREE.MathUtils.clamp(invLookUp * scaleFactor, -1, 1);
-    const rotX = upDown > 0 ? upDown * maxRotUp : upDown * maxRotDown;
-    const rotY =
-      -THREE.MathUtils.clamp(invLookRight * scaleFactor, -1, 1) * maxRotSide;
 
     // 虹彩に直接適用
     this.leftIris.rotation.set(rotX, rotY, 0);
     this.rightIris.rotation.set(rotX, rotY, 0);
   }
 
-  updateBlink(blendshapes) {
-    const blink = Math.max(
-      blendshapes.get("eyeBlinkLeft"),
-      blendshapes.get("eyeBlinkRight"),
-    );
+  updateBlink(blink) {
     this.vrm.expressionManager.setValue("blinkLeft", (blink - 0.5) * 2);
     this.vrm.expressionManager.setValue("blinkRight", (blink - 0.5) * 2);
   }
 
-  updateMouth(landmarks, blendshapes) {
-    const UPPER_LIP_BOTTOM_INDEX = 13;
-    const UNDER_LIP_TOP_INDEX = 14;
-    const mouthOpen =
-      (landmarks.faceLandmarks[0][UPPER_LIP_BOTTOM_INDEX].y -
-        landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y) *
-      -1;
-    this.vrm.expressionManager.setValue("aa", mouthOpen * 20);
-
-    const mouthPucker = blendshapes.get("mouthPucker");
-    const ou = (mouthPucker - 0.5) * 2;
-    this.vrm.expressionManager.setValue("ou", ou > 0 ? ou : 0);
-
-    const mouthFunnel = blendshapes.get("mouthFunnel");
-    this.vrm.expressionManager.setValue(
-      "oh",
-      mouthFunnel > 0.2 ? mouthFunnel : 0,
-    );
+  // 口の動き（口の開閉量を直接渡す）
+  updateMouth(mouth) {
+    this.vrm.expressionManager.setValue("aa", mouth.aa);
+    this.vrm.expressionManager.setValue("ih", mouth.ih);
+    this.vrm.expressionManager.setValue("ou", mouth.ou);
+    this.vrm.expressionManager.setValue("oh", mouth.oh);
   }
 
-  updateFacial(blendshapes) {
+  updateFacial({ browInnerUp, mouthSmileRight, mouthSmileLeft }) {
     this.vrm.expressionManager.setValue("neutral", 0);
 
-    const browInnerUp = blendshapes.get("browInnerUp");
     this.vrm.expressionManager.setValue(
       "surprised",
       browInnerUp > 0.7 ? browInnerUp : 0,
     );
 
-    const mouthSmileRight = blendshapes.get("mouthSmileRight");
-    const mouthSmileLeft = blendshapes.get("mouthSmileLeft");
     const happy = (mouthSmileRight || 0) + (mouthSmileLeft || 0) - 0.8;
     if (happy > 0) {
       this.vrm.expressionManager.setValue("blinkLeft", happy * 4);
