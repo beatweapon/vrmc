@@ -116,40 +116,7 @@ export class VRMAvatar {
       coefsMap = this.retarget(landmarks.faceBlendshapes);
     }
 
-    // 口の開閉量
-    let mouthOpen = 0;
-    if (landmarks.faceLandmarks?.[0]) {
-      const UPPER_LIP_BOTTOM_INDEX = 13;
-      const UNDER_LIP_TOP_INDEX = 14;
-      mouthOpen =
-        (landmarks.faceLandmarks[0][UPPER_LIP_BOTTOM_INDEX].y -
-          landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y) *
-        -1;
-    }
-
-    // mouthPucker, mouthFunnel
-    const mouthPucker = coefsMap.get("mouthPucker") || 0;
-    const mouthFunnel = coefsMap.get("mouthFunnel") || 0;
-
-    // 計算結果をmouthオブジェクトに格納
-    const mouth = { aa: 0, ou: 0, oh: 0 };
-    mouth.aa = mouthOpen * 20;
-    mouth.ou = (mouthPucker - 0.5) * 2 > 0 ? (mouthPucker - 0.5) * 2 : 0;
-    mouth.oh = mouthFunnel > 0.2 ? mouthFunnel : 0;
-
-    // 口の形(ou/oh)が大きい場合はaaを減衰させる（相互抑制）
-    const aaMax = 1.0;
-    const ouMax = 0.8;
-    const ohMax = 0.8;
-    mouth.ou = Math.min(mouth.ou, ouMax);
-    mouth.oh = Math.min(mouth.oh, ohMax);
-    // ou, ohの合計が大きい場合、aaを減衰
-    const shapeSum = mouth.ou + mouth.oh;
-    if (shapeSum > 0.5) {
-      mouth.aa = Math.min(mouth.aa, Math.max(0, 1.0 - shapeSum));
-    } else {
-      mouth.aa = Math.min(mouth.aa, aaMax);
-    }
+    const mouth = this.computedMouth(landmarks);
 
     return {
       baseRotationQuat,
@@ -181,6 +148,7 @@ export class VRMAvatar {
   // 口の動き（口の開閉量を直接渡す）
   updateMouthWithOpen(mouth) {
     this.vrm.expressionManager.setValue("aa", mouth.aa);
+    this.vrm.expressionManager.setValue("ih", mouth.ih);
     this.vrm.expressionManager.setValue("ou", mouth.ou);
     this.vrm.expressionManager.setValue("oh", mouth.oh);
   }
@@ -224,6 +192,47 @@ export class VRMAvatar {
     );
 
     return baseRotationQuat;
+  }
+
+  computedMouth(landmarks) {
+    // 口の開閉量
+    let mouthOpen = 0;
+    if (landmarks.faceLandmarks?.[0]) {
+      const UPPER_LIP_BOTTOM_INDEX = 13;
+      const UNDER_LIP_TOP_INDEX = 14;
+      mouthOpen =
+        (landmarks.faceLandmarks[0][UPPER_LIP_BOTTOM_INDEX].y -
+          landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y) *
+        -1;
+    }
+
+    const coefsMap = this.retarget(landmarks.faceBlendshapes || []);
+
+    // mouthPucker, mouthFunnel
+    const mouthPucker = coefsMap.get("mouthPucker") || 0;
+    const mouthFunnel = coefsMap.get("mouthFunnel") || 0;
+
+    // 計算結果をmouthオブジェクトに格納
+    const mouth = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+    mouth.aa = mouthOpen * 15;
+    mouth.ou = (mouthPucker - 0.5) * 2 > 0 ? (mouthPucker - 0.5) * 2 : 0;
+    mouth.oh = mouthFunnel > 0.2 ? mouthFunnel : 0;
+
+    // 口の形(ou/oh)が大きい場合はaaを減衰させる（相互抑制）
+    const aaMax = 1.0;
+    const ouMax = 0.8;
+    const ohMax = 0.8;
+    mouth.ou = Math.min(mouth.ou, ouMax);
+    mouth.oh = Math.min(mouth.oh, ohMax);
+    // ou, ohの合計が大きい場合、aaを減衰
+    const shapeSum = mouth.ou + mouth.oh;
+    if (shapeSum > 0.5) {
+      mouth.aa = Math.min(mouth.aa, Math.max(0, 1.0 - shapeSum));
+    } else {
+      mouth.aa = Math.min(mouth.aa, aaMax);
+    }
+
+    return mouth;
   }
 
   updateHeadRotation(baseRotationQuat) {
@@ -377,6 +386,7 @@ export class VRMAvatar {
       0.5 -
         Math.max(
           this.vrm.expressionManager.getValue("aa"),
+          this.vrm.expressionManager.getValue("ih"),
           this.vrm.expressionManager.getValue("ee"),
           this.vrm.expressionManager.getValue("ou"),
           this.vrm.expressionManager.getValue("oh"),
