@@ -127,16 +127,40 @@ export class VRMAvatar {
         -1;
     }
 
+    // mouthPucker, mouthFunnel
+    const mouthPucker = coefsMap.get("mouthPucker") || 0;
+    const mouthFunnel = coefsMap.get("mouthFunnel") || 0;
+
+    // 計算結果をmouthオブジェクトに格納
+    const mouth = { aa: 0, ou: 0, oh: 0 };
+    mouth.aa = mouthOpen * 20;
+    mouth.ou = (mouthPucker - 0.5) * 2 > 0 ? (mouthPucker - 0.5) * 2 : 0;
+    mouth.oh = mouthFunnel > 0.2 ? mouthFunnel : 0;
+
+    // 口の形(ou/oh)が大きい場合はaaを減衰させる（相互抑制）
+    const aaMax = 1.0;
+    const ouMax = 0.8;
+    const ohMax = 0.8;
+    mouth.ou = Math.min(mouth.ou, ouMax);
+    mouth.oh = Math.min(mouth.oh, ohMax);
+    // ou, ohの合計が大きい場合、aaを減衰
+    const shapeSum = mouth.ou + mouth.oh;
+    if (shapeSum > 0.5) {
+      mouth.aa = Math.min(mouth.aa, Math.max(0, 1.0 - shapeSum));
+    } else {
+      mouth.aa = Math.min(mouth.aa, aaMax);
+    }
+
     return {
       baseRotationQuat,
       coefsMap,
-      mouthOpen,
+      mouth,
       landmarks,
     };
   }
 
   // vrmへの適用を一括で行う
-  applyBlendshapes({ baseRotationQuat, coefsMap, mouthOpen }) {
+  applyBlendshapes({ baseRotationQuat, coefsMap, mouth }) {
     // 首・頭回転を適用
     this.updateHeadRotation(baseRotationQuat);
 
@@ -147,25 +171,18 @@ export class VRMAvatar {
     this.updateBlink(coefsMap);
 
     // 口の動き
-    this.updateMouthWithOpen(mouthOpen, coefsMap);
+    // mouthオブジェクトを受け取る形に変更
+    this.updateMouthWithOpen(mouth);
 
     // 顔全体の表情
     this.updateFacial(coefsMap);
   }
 
   // 口の動き（口の開閉量を直接渡す）
-  updateMouthWithOpen(mouthOpen, blendshapes) {
-    this.vrm.expressionManager.setValue("aa", mouthOpen * 20);
-
-    const mouthPucker = blendshapes.get("mouthPucker");
-    const ou = (mouthPucker - 0.5) * 2;
-    this.vrm.expressionManager.setValue("ou", ou > 0 ? ou : 0);
-
-    const mouthFunnel = blendshapes.get("mouthFunnel");
-    this.vrm.expressionManager.setValue(
-      "oh",
-      mouthFunnel > 0.2 ? mouthFunnel : 0,
-    );
+  updateMouthWithOpen(mouth) {
+    this.vrm.expressionManager.setValue("aa", mouth.aa);
+    this.vrm.expressionManager.setValue("ou", mouth.ou);
+    this.vrm.expressionManager.setValue("oh", mouth.oh);
   }
 
   retarget(blendshapes) {
@@ -209,7 +226,6 @@ export class VRMAvatar {
     return baseRotationQuat;
   }
 
-  // headRotationQuatを引数で受け取る
   updateHeadRotation(baseRotationQuat) {
     if (!this.vrm || !baseRotationQuat) return;
 
