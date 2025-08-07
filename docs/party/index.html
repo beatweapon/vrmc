@@ -40,8 +40,10 @@
         updateBlendshape,
         changeAvatar,
         updateAvatars,
+        getModelArrayBuffer,
         avatars,
       } from "./avatarManager.js";
+      import { connectWebSocket } from "./wsClient.js";
 
       const getUserId = () => {
         let id = localStorage.getItem("userId");
@@ -53,6 +55,42 @@
       };
 
       const userId = getUserId();
+
+      // WebSocket接続
+      const handlers = {
+        onJoin: (msg) => {
+          msg.existingUserIds.forEach((id) => {
+            if (!avatars[id]) {
+              loadAvatar(id, scene, {
+                x: avatars.length * 0.2,
+                y: 0,
+                z: 0,
+              });
+            }
+          });
+        },
+        onUserJoined: (msg) => {
+          if (!avatars[msg.userId]) {
+            loadAvatar(msg.userId, scene, {
+              x: avatars.length * 0.2,
+              y: 0,
+              z: 0,
+            });
+          }
+        },
+        onReceiveVrm: async (userId, buffer) => {
+          await changeAvatar(userId, arrayBuffer);
+        },
+        onReceiveMotion: (msg) => {
+          updateBlendshape(msg.userId, msg.data);
+        },
+        onRequestMyVrm: async (msg) => {
+          const arrayBuffer = await getModelArrayBuffer(userId);
+          connectWebSocket.sendVrmTo(msg.userId, userId, arrayBuffer);
+        },
+      };
+
+      const ws = connectWebSocket(userId, handlers);
 
       const { scene, clock, camera, renderer } = initScene();
 

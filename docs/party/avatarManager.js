@@ -8,14 +8,17 @@ const db = createIndexedDB(DB_NAME, STORE_NAME);
 const DEFAULT_MODEL_URL = "../models/VRM1_Constraint_Twist_Sample.vrm";
 export const avatars = {};
 
-export const loadAvatar = async (userId, scene) => {
-  const position = { x: 0, y: 0, z: 0 };
+export const loadAvatar = async (userId, scene, position) => {
   const model = await db.loadData(userId);
   const url = model
     ? URL.createObjectURL(new Blob([model]))
     : DEFAULT_MODEL_URL;
 
   avatars[userId] = new VRMAvatar(url, scene, position);
+};
+
+export const getModelArrayBuffer = async (userId) => {
+  return await db.loadData(userId);
 };
 
 export const calculateBlendshapes = (userId, landmarks) => {
