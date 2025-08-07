@@ -56,6 +56,10 @@
 
       const userId = getUserId();
 
+      const { scene, clock, camera, renderer } = initScene();
+
+      loadAvatar(userId, scene, { x: 0, y: 0, z: 0 });
+
       // WebSocket接続
       const handlers = {
         onJoin: (msg) => {
@@ -93,14 +97,6 @@
       };
 
       const ws = connectWebSocket(userId, handlers);
-
-      const { scene, clock, camera, renderer } = initScene();
-
-      loadAvatar(userId, scene, {
-        x: 0,
-        y: 0,
-        z: 0,
-      });
 
       const video = document.getElementById("video");
 
