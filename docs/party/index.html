@@ -16,9 +16,6 @@
         display: none;
       }
     </style>
-
-    <!-- Socket.IO -->
-    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
   </head>
   <body>
     <script type="importmap">
@@ -34,18 +31,17 @@
         }
       }
     </script>
-    <video id="video" autoplay playsinline></video>
     <script type="module">
-      import * as THREE from "three";
       import * as vision from "@mediapipe/tasks-vision";
-      import { VRMAvatar } from "../vrmAvatar.js";
-      import { createIndexedDB } from "./indexedDB.js";
+      import { initScene } from "./scene.js";
+      import {
+        loadAvatar,
+        updateBlendshape,
+        changeAvatar,
+        updateAvatars,
+        avatars,
+      } from "./avatarManager.js";
 
-      const DB_NAME = "vrmc";
-      const STORE_NAME = "vrm";
-      const db = createIndexedDB(DB_NAME, STORE_NAME);
-
-      // 固定ユーザーID
       const getUserId = () => {
         let id = localStorage.getItem("userId");
         if (!id) {
@@ -54,91 +50,25 @@
         }
         return id;
       };
+
       const userId = getUserId();
 
-      const { FaceLandmarker, FilesetResolver } = vision;
-      const SERVER_URL = "ws://localhost:3001"; // モーション同期用WS
+      const { scene, clock, camera, renderer } = initScene();
 
-      // ===== 共通再接続WS =====
-      function connectWebSocket(url, onOpen, onMessage) {
-        let ws;
-        let reconnectTimeout = 1000;
+      loadAvatar(userId, scene);
 
-        function init() {
-          ws = new WebSocket(`${url}?userId=${userId}`);
-          ws.binaryType = "arraybuffer";
+      const video = document.getElementById("video");
 
-          ws.onopen = () => {
-            console.log("Connected:", url);
-            reconnectTimeout = 1000;
-            onOpen(ws);
-          };
-          ws.onmessage = (e) => onMessage(e.data, ws);
-          ws.onclose = () => {
-            console.warn("Disconnected. Reconnecting...");
-            setTimeout(init, reconnectTimeout);
-            reconnectTimeout = Math.min(reconnectTimeout * 2, 10000);
-          };
-          ws.onerror = () => ws.close();
-        }
-        init();
-      }
-
-      // ===== Three.js シーン設定 =====
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(
-        30,
-        window.innerWidth / window.innerHeight,
-        0.1,
-        20,
-      );
-      camera.position.set(0, 1.4, 1.5);
-      const renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      document.body.appendChild(renderer.domElement);
-
-      // Light
-      const light = new THREE.AmbientLight(0xffffff, Math.PI);
-      scene.add(light);
-
-      // 自分のアバター
-      const myAvatarModel = await db.loadData(userId);
-      const blob = new Blob([myAvatarModel], {
-        type: "application/octet-stream",
-      });
-      const myUrl = URL.createObjectURL(blob);
-      const myAvatar = new VRMAvatar(
-        myUrl || "../models/VRM1_Constraint_Twist_Sample.vrm",
-        scene,
-        { x: -0.5, y: 0, z: 0 },
-      );
-      const otherAvatar = new VRMAvatar(
-        "../models/VRM1_Constraint_Twist_Sample.vrm",
-        scene,
-        { x: 0.5, y: 0, z: 0 },
-      );
-
-      // ===== Mediapipe設定 =====
-      const video = document.createElement("video");
-      video.autoplay = true;
-      video.playsInline = true;
-      video.style.display = "none";
-      document.body.appendChild(video);
-
-      async function initCamera() {
+      const initCamera = async () => {
         video.srcObject = await navigator.mediaDevices.getUserMedia({
           video: true,
         });
         return new Promise((r) => (video.onloadedmetadata = () => r(video)));
-      }
+      };
 
-      let myFaceResult = null;
-      let prevOtherResult = null;
-      let nextOtherResult = null;
-      let interpolationStartTime = 0;
-      const interpolationDuration = 0.05;
+      const startFaceTracking = async (video) => {
+        const { FaceLandmarker, FilesetResolver } = vision;
 
-      async function startFaceTracking(video) {
         const filesetResolver = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm",
         );
@@ -157,118 +87,42 @@
           },
         );
 
-        async function detect() {
+        const detect = async () => {
           const result = await faceLandmarker.detectForVideo(
             video,
             performance.now(),
           );
-          if (result.faceLandmarks?.length > 0) myFaceResult = result;
+          if (result.faceLandmarks?.length > 0) {
+            updateBlendshape(userId, result);
+          }
           requestAnimationFrame(detect);
-        }
+        };
         detect();
-      }
+      };
 
-      // ===== WebSocket接続 =====
-      let motionWS;
-      connectWebSocket(
-        SERVER_URL,
-        (ws) => {
-          motionWS = ws;
-        },
-        (data) => {
-          const msg = JSON.parse(data);
-          if (msg.type === "motion" && msg.id !== userId) {
-            prevOtherResult = nextOtherResult
-              ? structuredClone(nextOtherResult)
-              : structuredClone(msg.data);
-            nextOtherResult = structuredClone(msg.data);
-            interpolationStartTime = performance.now() / 1000;
-          }
-        },
-      );
-
-      // ===== モーション送信（30fps） =====
-      setInterval(() => {
-        if (myFaceResult && motionWS?.readyState === WebSocket.OPEN) {
-          motionWS.send(
-            JSON.stringify({
-              type: "motion",
-              id: userId,
-              data: myFaceResult,
-            }),
-          );
-        }
-      }, 33);
-
-      // ===== 補間処理 =====
-      const lerp = (a, b, t) => a + (b - a) * t;
-      function interpolateResults(prev, next, alpha) {
-        if (!prev || !next) return next || prev;
-        const result = structuredClone(prev);
-
-        if (prev.faceLandmarks && next.faceLandmarks) {
-          for (let i = 0; i < prev.faceLandmarks[0].length; i++) {
-            result.faceLandmarks[0][i].x = lerp(
-              prev.faceLandmarks[0][i].x,
-              next.faceLandmarks[0][i].x,
-              alpha,
-            );
-            result.faceLandmarks[0][i].y = lerp(
-              prev.faceLandmarks[0][i].y,
-              next.faceLandmarks[0][i].y,
-              alpha,
-            );
-            result.faceLandmarks[0][i].z = lerp(
-              prev.faceLandmarks[0][i].z,
-              next.faceLandmarks[0][i].z,
-              alpha,
-            );
-          }
-        }
-
-        if (prev.faceBlendshapes && next.faceBlendshapes) {
-          const prevCats = prev.faceBlendshapes[0].categories;
-          const nextCats = next.faceBlendshapes[0].categories;
-          for (let i = 0; i < prevCats.length; i++) {
-            result.faceBlendshapes[0].categories[i].score = lerp(
-              prevCats[i].score,
-              nextCats[i].score,
-              alpha,
-            );
-          }
-        }
-        return result;
-      }
-
-      // ===== 描画ループ =====
-      const clock = new THREE.Clock();
-      function animate() {
+      const animate = () => {
         requestAnimationFrame(animate);
-        const delta = clock.getDelta();
+        updateAvatars(clock.getDelta());
+        renderer.render(scene, camera);
+      };
 
-        if (myFaceResult) myAvatar.updateBlendshapes(myFaceResult);
-
-        if (prevOtherResult && nextOtherResult) {
-          const now = performance.now() / 1000;
-          const alpha = Math.min(
-            (now - interpolationStartTime) / interpolationDuration,
-            1,
-          );
-          const frameData =
-            alpha >= 1
-              ? nextOtherResult
-              : interpolateResults(prevOtherResult, nextOtherResult, alpha);
-          otherAvatar.updateBlendshapes(frameData);
+      // ドラッグ＆ドロップ対応
+      document.addEventListener("dragover", (e) => e.preventDefault());
+      document.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (!file.name.endsWith(".vrm")) {
+          alert("VRMファイルをドロップしてください");
+          return;
         }
 
-        if (myAvatar.vrm) myAvatar.vrm.update(delta);
-        if (otherAvatar.vrm) otherAvatar.vrm.update(delta);
-
-        renderer.render(scene, camera);
-      }
+        const arrayBuffer = await file.arrayBuffer();
+        await changeAvatar(userId, arrayBuffer);
+      });
 
       initCamera().then((v) => startFaceTracking(v));
       animate();
     </script>
+    <video id="video" autoplay playsinline></video>
   </body>
 </html>

@@ -1,72 +1,33 @@
-export function createIndexedDB(
-  dbName = "localdb",
-  storeName = "keyValueStore",
-) {
+export const createIndexedDB = (dbName, storeName) => {
   const openDatabase = () => {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(dbName);
-
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.createObjectStore(storeName, { keyPath: "id" });
-        }
+      const request = indexedDB.open(dbName, 1);
+      request.onupgradeneeded = (e) => {
+        e.target.result.createObjectStore(storeName);
       };
-
-      request.onsuccess = (event) => {
-        resolve(event.target.result);
-      };
-
-      request.onerror = (event) => {
-        reject(event.target.error);
-      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
     });
   };
 
-  const saveData = (id, data) => {
-    return openDatabase().then((db) => {
+  return {
+    saveData: async (key, data) => {
+      const db = await openDatabase();
       return new Promise((resolve, reject) => {
-        const transaction = db.transaction([storeName], "readwrite");
-        const store = transaction.objectStore(storeName);
-        const request = store.put({ id, data });
-
-        request.onsuccess = () => resolve();
-        request.onerror = (event) => reject(event.target.error);
+        const tx = db.transaction(storeName, "readwrite");
+        tx.objectStore(storeName).put(data, key);
+        tx.oncomplete = resolve;
+        tx.onerror = reject;
       });
-    });
-  };
-
-  const saveFile = (id, file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        saveData(id, event.target.result).then(resolve).catch(reject);
-      };
-      reader.onerror = reject;
-      reader.readAsArrayBuffer(file);
-    });
-  };
-
-  const loadData = (id) => {
-    return openDatabase().then((db) => {
+    },
+    loadData: async (key) => {
+      const db = await openDatabase();
       return new Promise((resolve, reject) => {
-        const transaction = db.transaction([storeName], "readonly");
-        const store = transaction.objectStore(storeName);
-        const request = store.get(id);
-
-        request.onsuccess = (event) => {
-          const result = event.target.result;
-          if (result) {
-            resolve(result.data);
-          } else {
-            resolve(undefined);
-          }
-        };
-
-        request.onerror = (event) => reject(event.target.error);
+        const tx = db.transaction(storeName, "readonly");
+        const req = tx.objectStore(storeName).get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = reject;
       });
-    });
+    },
   };
-
-  return { saveData, saveFile, loadData };
-}
+};

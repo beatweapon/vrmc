@@ -66,9 +66,6 @@ export class VRMAvatar {
   setupVrm(vrm) {
     this.adjustArmsToIPose(vrm);
 
-    // lookAt 機能を無効化
-    // vrm.lookAt.target = null;
-
     // Iris ボーンを取得（無ければ眼球ボーンを使用）
     this.leftIris = this.findIrisBone(vrm, "leftEye");
     this.rightIris = this.findIrisBone(vrm, "rightEye");
