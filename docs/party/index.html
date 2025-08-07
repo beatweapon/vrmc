@@ -65,11 +65,7 @@
         onJoin: (msg) => {
           msg.existingUserIds.forEach((id) => {
             if (!avatars[id]) {
-              loadAvatar(id, scene, {
-                x: Object.keys(avatars).length + 1 * 0.2,
-                y: 0,
-                z: 0,
-              });
+              loadAvatar(id, scene, { x: 0, y: 0, z: 0 });
             }
           });
         },
@@ -77,11 +73,7 @@
           console.log("User Joined:", msg);
 
           if (!avatars[msg.userId]) {
-            loadAvatar(msg.userId, scene, {
-              x: Object.keys(avatars).length + 1 * 0.2,
-              y: 0,
-              z: 0,
-            });
+            loadAvatar(msg.userId, scene, { x: 0, y: 0, z: 0 });
           }
         },
         onReceiveVrm: async (userId, arrayBuffer) => {
