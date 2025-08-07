@@ -62,7 +62,7 @@
           msg.existingUserIds.forEach((id) => {
             if (!avatars[id]) {
               loadAvatar(id, scene, {
-                x: avatars.length * 0.2,
+                x: Object.keys(avatars).length + 1 * 0.2,
                 y: 0,
                 z: 0,
               });
@@ -72,7 +72,7 @@
         onUserJoined: (msg) => {
           if (!avatars[msg.userId]) {
             loadAvatar(msg.userId, scene, {
-              x: avatars.length * 0.2,
+              x: Object.keys(avatars).length + 1 * 0.2,
               y: 0,
               z: 0,
             });
@@ -137,7 +137,10 @@
           );
           if (result.faceLandmarks?.length > 0) {
             const blendshapeData = calculateBlendshapes(userId, result);
-            if (blendshapeData) updateBlendshape(userId, blendshapeData);
+            if (blendshapeData) {
+              updateBlendshape(userId, blendshapeData);
+              ws.sendMotion(userId, blendshapeData);
+            }
           }
           requestAnimationFrame(detect);
         };
