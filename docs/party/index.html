@@ -84,7 +84,6 @@
           await changeAvatar(userId, arrayBuffer);
         },
         onReceiveMotion: (msg) => {
-          console.log("Received motion data:", msg);
           updateBlendshape(msg.userId, msg.data);
         },
         onRequestMyVrm: async (msg) => {

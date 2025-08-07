@@ -13,7 +13,6 @@ export const connectWebSocket = (userId, handlers) => {
     };
 
     ws.onmessage = async (e) => {
-      console.log("Received message:", e.data);
       if (e.data instanceof ArrayBuffer) {
         // VRM受信処理
         const buffer = new Uint8Array(e.data);
