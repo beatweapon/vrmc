@@ -171,7 +171,12 @@ export class VRMAvatar {
       originalQuaternion.w,
     );
 
-    return baseRotationQuat;
+    return [
+      baseRotationQuat.x,
+      baseRotationQuat.y,
+      baseRotationQuat.z,
+      baseRotationQuat.w,
+    ];
   }
 
   computedBlink(blendshapes) {
@@ -288,17 +293,8 @@ export class VRMAvatar {
     this.updateFacial(facial);
   }
 
-  updateHeadRotation(baseRotationQuat) {
-    if (!this.vrm || !baseRotationQuat) return;
-
-    const adjustQuaternionAngleRatio = (quaternion, ratio) => {
-      return new THREE.Quaternion(
-        quaternion.x * ratio,
-        quaternion.y * ratio,
-        quaternion.z * ratio,
-        quaternion.w,
-      );
-    };
+  updateHeadRotation(quatArray) {
+    if (!this.vrm || !quatArray) return;
 
     const spineBone = this.vrm.humanoid.getNormalizedBoneNode("spine");
     const chestBone = this.vrm.humanoid.getNormalizedBoneNode("chest");
@@ -306,6 +302,13 @@ export class VRMAvatar {
       this.vrm.humanoid.getNormalizedBoneNode("upperChest");
     const neckBone = this.vrm.humanoid.getNormalizedBoneNode("neck");
     const headBone = this.vrm.humanoid.getNormalizedBoneNode("head");
+
+    const baseRotationQuat = new THREE.Quaternion(
+      quatArray[0],
+      quatArray[1],
+      quatArray[2],
+      quatArray[3],
+    );
 
     const segments = 5; // spine, chest, upperChest, neck, head
     const distributedQuats = [];
