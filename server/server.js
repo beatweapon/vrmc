@@ -36,7 +36,7 @@ wss.on("connection", (ws, req) => {
   ws.send(
     JSON.stringify({
       type: "existingUsers",
-      userIds: existingUserIds,
+      existingUserIds,
     }),
   );
 

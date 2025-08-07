@@ -94,7 +94,11 @@
 
       const { scene, clock, camera, renderer } = initScene();
 
-      loadAvatar(userId, scene);
+      loadAvatar(userId, scene, {
+        x: 0,
+        y: 0,
+        z: 0,
+      });
 
       const video = document.getElementById("video");
 
