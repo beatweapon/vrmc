@@ -70,6 +70,8 @@
           });
         },
         onUserJoined: (msg) => {
+          console.log("User Joined:", msg);
+
           if (!avatars[msg.userId]) {
             loadAvatar(msg.userId, scene, {
               x: Object.keys(avatars).length + 1 * 0.2,
@@ -82,6 +84,7 @@
           await changeAvatar(userId, arrayBuffer);
         },
         onReceiveMotion: (msg) => {
+          console.log("Received motion data:", msg);
           updateBlendshape(msg.userId, msg.data);
         },
         onRequestMyVrm: async (msg) => {
