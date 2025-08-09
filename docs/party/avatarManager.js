@@ -22,9 +22,12 @@ if (!avatarUIContainer) {
   document.body.appendChild(avatarUIContainer);
 }
 
+const avatarsUI = new Map(); // userId -> { wrapper, listeners }
+
 // UI作成関数
 const createAvatarUI = (userId) => {
   const wrapper = document.createElement("div");
+  wrapper.dataset.userId = userId;
   wrapper.style.marginBottom = "8px";
 
   const label = document.createElement("div");
@@ -43,7 +46,7 @@ const createAvatarUI = (userId) => {
   knob.style.height = "100%";
   knob.style.background = "#0f0";
   knob.style.position = "absolute";
-  knob.style.left = "65px"; // 中央寄せ
+  knob.style.left = "65px";
 
   bar.appendChild(knob);
   wrapper.appendChild(label);
@@ -55,14 +58,14 @@ const createAvatarUI = (userId) => {
   let startX = 0;
   let startLeft = 0;
 
-  knob.addEventListener("mousedown", (e) => {
+  const onMouseDown = (e) => {
     isDragging = true;
     startX = e.clientX;
     startLeft = parseInt(knob.style.left);
     document.body.style.userSelect = "none";
-  });
+  };
 
-  window.addEventListener("mousemove", (e) => {
+  const onMouseMove = (e) => {
     if (!isDragging) return;
     const dx = e.clientX - startX;
     let newLeft = startLeft + dx;
@@ -70,16 +73,29 @@ const createAvatarUI = (userId) => {
     if (newLeft > 130) newLeft = 130;
     knob.style.left = newLeft + "px";
 
-    // -2 ～ 2 にマッピングして位置更新
     const normalized = (newLeft / 130) * 4 - 2;
     if (avatars[userId] && avatars[userId].scene) {
       avatars[userId].vrm.scene.position.x = normalized;
     }
-  });
+  };
 
-  window.addEventListener("mouseup", () => {
+  const onMouseUp = () => {
     isDragging = false;
     document.body.style.userSelect = "";
+  };
+
+  knob.addEventListener("mousedown", onMouseDown);
+  window.addEventListener("mousemove", onMouseMove);
+  window.addEventListener("mouseup", onMouseUp);
+
+  // リスナー管理用に保持
+  avatarsUI.set(userId, {
+    wrapper,
+    listeners: [
+      { target: knob, type: "mousedown", handler: onMouseDown },
+      { target: window, type: "mousemove", handler: onMouseMove },
+      { target: window, type: "mouseup", handler: onMouseUp },
+    ],
   });
 };
 
@@ -136,16 +152,19 @@ export const destroyAvatar = (userId) => {
   if (avatars[userId]) {
     avatars[userId].destroyModel();
     delete avatars[userId];
+  }
 
-    // UI削除
-    const container = document.getElementById("avatar-ui-container");
-    if (container) {
-      const avatarUI = container.querySelector(
-        `div:contains("${userId.slice(0, 6)}")`,
-      );
-      if (avatarUI) {
-        container.removeChild(avatarUI);
-      }
+  // UI削除 & リスナー解除
+  const uiData = avatarsUI.get(userId);
+  if (uiData) {
+    uiData.listeners.forEach(({ target, type, handler }) => {
+      target.removeEventListener(type, handler);
+    });
+
+    if (uiData.wrapper.parentNode) {
+      uiData.wrapper.parentNode.removeChild(uiData.wrapper);
     }
+
+    avatarsUI.delete(userId);
   }
 };
