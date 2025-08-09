@@ -54,7 +54,7 @@ export class VRMAvatar {
   }
 
   async changeModel(url, onLoaded) {
-    destroyModel();
+    this.destroyModel();
 
     this.loadModel(url, onLoaded);
   }

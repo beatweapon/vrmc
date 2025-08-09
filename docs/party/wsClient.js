@@ -9,7 +9,6 @@ export const connectWebSocket = (userId, handlers) => {
 
     ws.onopen = () => {
       console.log("Connected");
-      ws.send(JSON.stringify({ type: "requestAllVrms" }));
     };
 
     ws.onmessage = async (e) => {
@@ -64,6 +63,7 @@ export const connectWebSocket = (userId, handlers) => {
       }
     },
     requestVrm: (requestFrom, requestTo) => {
+      console.log("requestVrm", requestFrom, requestTo);
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(
           JSON.stringify({

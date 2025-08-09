@@ -65,10 +65,11 @@
       // WebSocket接続
       const handlers = {
         onJoin: (msg) => {
-          msg.existingUserIds.forEach((id) => {
+          msg.existingUserIds.forEach(async (id) => {
             if (!avatars[id]) {
               loadAvatar(id, scene, { x: 0, y: 0, z: 0 });
-              if (!existsOriginalAvatar(id)) {
+              if (!(await existsOriginalAvatar(id))) {
+                console.log("Requesting VRM for user:", id);
                 requestVrm(userId, id);
               }
             }
@@ -102,7 +103,7 @@
       const sendVrm = async (msg) => {
         const arrayBuffer = await getModelArrayBuffer(userId);
         if (arrayBuffer) {
-          ws.sendVrm(msg.targetId, userId, arrayBuffer);
+          ws.sendVrm(userId, arrayBuffer, msg.targetId);
         }
       };
 
