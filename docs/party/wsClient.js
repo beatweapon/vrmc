@@ -48,6 +48,10 @@ export const connectWebSocket = (userId, handlers) => {
           // 自分のVRM送信
           handlers.onRequestMyVrm?.(msg);
         }
+        if (msg.type === "userLeft") {
+          // 自分のVRM送信
+          handlers.onUserLeft?.(msg);
+        }
       }
     };
   };
@@ -59,7 +63,18 @@ export const connectWebSocket = (userId, handlers) => {
         ws.send(JSON.stringify({ type: "motion", userId, data: faceData }));
       }
     },
-    sendVrm: (targetId, senderId, arrayBuffer) => {
+    requestVrm: (requestFrom, requestTo) => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: "requestVrm",
+            requestFrom,
+            requestTo,
+          }),
+        );
+      }
+    },
+    sendVrm: (senderId, arrayBuffer, targetId) => {
       const headerObj = {
         type: "vrmData",
         senderId,

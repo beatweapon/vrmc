@@ -39,7 +39,9 @@
         calculateBlendshapes,
         updateBlendshape,
         changeAvatar,
+        destroyAvatar,
         updateAvatars,
+        existsOriginalAvatar,
         getModelArrayBuffer,
         avatars,
       } from "./avatarManager.js";
@@ -66,6 +68,9 @@
           msg.existingUserIds.forEach((id) => {
             if (!avatars[id]) {
               loadAvatar(id, scene, { x: 0, y: 0, z: 0 });
+              if (!existsOriginalAvatar(id)) {
+                requestVrm(userId, id);
+              }
             }
           });
         },
@@ -84,12 +89,26 @@
           updateBlendshape(msg.userId, msg.data);
         },
         onRequestMyVrm: async (msg) => {
-          const arrayBuffer = await getModelArrayBuffer(userId);
-          connectWebSocket.sendVrmTo(msg.userId, userId, arrayBuffer);
+          sendVrm(msg);
+        },
+        onUserLeft: (msg) => {
+          console.log("User Left:", msg.userId);
+          destroyAvatar(msg.userId);
         },
       };
 
       const ws = connectWebSocket(userId, handlers);
+
+      const sendVrm = async (msg) => {
+        const arrayBuffer = await getModelArrayBuffer(userId);
+        if (arrayBuffer) {
+          ws.sendVrm(msg.targetId, userId, arrayBuffer);
+        }
+      };
+
+      const requestVrm = (requestTo) => {
+        ws.requestVrm(userId, requestTo);
+      };
 
       const video = document.getElementById("video");
 
@@ -155,7 +174,7 @@
         }
 
         const arrayBuffer = await file.arrayBuffer();
-        ws.sendVrm(userId, userId, arrayBuffer);
+        ws.sendVrm(userId, arrayBuffer);
         await changeAvatar(userId, arrayBuffer);
       });
 

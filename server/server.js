@@ -4,14 +4,6 @@ const wss = new WebSocketServer({ port: 3000 });
 
 const clients = new Map();
 
-const broadcast = (data, except) => {
-  wss.clients.forEach((client) => {
-    if (client !== except && client.readyState === 1) {
-      client.send(data);
-    }
-  });
-};
-
 wss.on("connection", (ws, req) => {
   const userId = new URL(req.url, "http://localhost").searchParams.get(
     "userId",
@@ -57,36 +49,44 @@ wss.on("connection", (ws, req) => {
 
   ws.on("message", (msg, isBinary) => {
     if (isBinary) {
-      // VRMチャンクはそのまま他のクライアントに転送
-      broadcast(msg, ws);
+      sendBinary(msg, ws);
     } else {
       const data = JSON.parse(msg.toString());
 
       if (data.type === "motion") {
-        broadcast(JSON.stringify(data), ws);
+        sendMessage(msg, ws);
       }
 
       if (data.type === "requestVrm") {
-        // 特定の相手にVRM送ってと依頼
-        wss.clients.forEach((client) => {
-          if (client.userId === data.id) {
-            client.send(
-              JSON.stringify({ type: "sendVrmTo", targetId: userId }),
-            );
-          }
-        });
-      }
-
-      if (data.type === "requestAllVrms") {
-        // 全員にVRM送ってと依頼
-        wss.clients.forEach((client) => {
-          if (client.userId && client.userId !== userId) {
-            client.send(
-              JSON.stringify({ type: "sendVrmTo", targetId: userId }),
-            );
-          }
-        });
+        sendMessage(
+          JSON.stringify({ type: "sendVrmTo", targetId: data.requestFrom }),
+          ws,
+          data.requestTo,
+        );
       }
     }
   });
 });
+
+const sendBinary = (msg, ws) => {
+  const buffer = new Uint8Array(msg);
+  const headerLength = new DataView(buffer.buffer).getUint32(0, true);
+  const headerBytes = buffer.slice(4, 4 + headerLength);
+  const header = JSON.parse(new TextDecoder().decode(headerBytes));
+
+  sendMessage(msg, ws, header.targetId);
+};
+
+const sendMessage = (data, except, targetId) => {
+  wss.clients.forEach((client) => {
+    if (targetId) {
+      if (client.userId === targetId && client.readyState === 1) {
+        client.send(data);
+      }
+    } else {
+      if (client !== except && client.readyState === 1) {
+        client.send(data);
+      }
+    }
+  });
+};

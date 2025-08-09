@@ -94,6 +94,10 @@ export const loadAvatar = async (userId, scene, position) => {
   createAvatarUI(userId);
 };
 
+export const existsOriginalAvatar = async (userId) => {
+  return await db.existsKey(userId);
+};
+
 export const getModelArrayBuffer = async (userId) => {
   return await db.loadData(userId);
 };
@@ -125,5 +129,23 @@ export const changeAvatar = async (userId, arrayBuffer) => {
 
     avatars[userId].changeModel(url);
     await db.saveData(userId, arrayBuffer);
+  }
+};
+
+export const destroyAvatar = (userId) => {
+  if (avatars[userId]) {
+    avatars[userId].destroyModel();
+    delete avatars[userId];
+
+    // UI削除
+    const container = document.getElementById("avatar-ui-container");
+    if (container) {
+      const avatarUI = container.querySelector(
+        `div:contains("${userId.slice(0, 6)}")`,
+      );
+      if (avatarUI) {
+        container.removeChild(avatarUI);
+      }
+    }
   }
 };

@@ -54,12 +54,17 @@ export class VRMAvatar {
   }
 
   async changeModel(url, onLoaded) {
+    destroyModel();
+
+    this.loadModel(url, onLoaded);
+  }
+
+  destroyModel() {
     if (this.vrm) {
       this.scene.remove(this.vrm.scene);
       VRMUtils.deepDispose(this.vrm.scene);
       this.vrm = null;
     }
-    this.loadModel(url, onLoaded);
   }
 
   setupVrm(vrm) {
@@ -91,8 +96,12 @@ export class VRMAvatar {
   adjustArmsToIPose(vrm) {
     const leftUpperArm = vrm.humanoid.getNormalizedBoneNode("leftUpperArm");
     const rightUpperArm = vrm.humanoid.getNormalizedBoneNode("rightUpperArm");
+    const leftLowerArm = vrm.humanoid.getNormalizedBoneNode("leftLowerArm");
+    const rightLowerArm = vrm.humanoid.getNormalizedBoneNode("rightLowerArm");
     if (leftUpperArm) leftUpperArm.rotation.z = -Math.PI / 2.5;
     if (rightUpperArm) rightUpperArm.rotation.z = Math.PI / 2.5;
+    if (leftLowerArm) leftLowerArm.rotation.z = -Math.PI / 8;
+    if (rightLowerArm) rightLowerArm.rotation.z = Math.PI / 8;
   }
 
   updateBlendshapes(landmarks) {
