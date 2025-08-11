@@ -14,8 +14,8 @@ if (!avatarUIContainer) {
   avatarUIContainer = document.createElement("div");
   avatarUIContainer.id = "avatar-ui-container";
   avatarUIContainer.style.position = "fixed";
-  avatarUIContainer.style.top = "10px";
-  avatarUIContainer.style.left = "10px";
+  avatarUIContainer.style.width = "100%";
+  avatarUIContainer.style.top = "3rem";
   avatarUIContainer.style.zIndex = "10";
   avatarUIContainer.style.color = "white";
   avatarUIContainer.style.fontFamily = "sans-serif";
@@ -26,32 +26,21 @@ const avatarsUI = new Map(); // userId -> { wrapper, listeners }
 
 // UI作成関数
 const createAvatarUI = (userId) => {
-  const wrapper = document.createElement("div");
-  wrapper.dataset.userId = userId;
-  wrapper.style.marginBottom = "8px";
-
-  const label = document.createElement("div");
-  label.textContent = `Avatar: ${userId.slice(0, 6)}`;
-  label.style.marginBottom = "4px";
-
-  const bar = document.createElement("div");
-  bar.style.width = "150px";
-  bar.style.height = "20px";
-  bar.style.background = "#333";
-  bar.style.border = "1px solid #666";
-  bar.style.position = "relative";
-
   const knob = document.createElement("div");
-  knob.style.width = "20px";
-  knob.style.height = "100%";
-  knob.style.background = "#0f0";
+  knob.dataset.userId = userId;
+  knob.style.cursor = "grab";
+  knob.style.width = "100px";
+  knob.style.height = "100px";
+  knob.style.display = "flex";
+  knob.style.justifyContent = "center";
+  knob.style.alignItems = "center";
+  knob.style.border = "#fff solid 1px";
   knob.style.position = "absolute";
-  knob.style.left = "65px";
+  knob.style.left = window.innerWidth / 2 + "px";
+  knob.style.transform = "translateX(-50%)";
+  knob.textContent = userId.slice(0, 6);
 
-  bar.appendChild(knob);
-  wrapper.appendChild(label);
-  wrapper.appendChild(bar);
-  avatarUIContainer.appendChild(wrapper);
+  avatarUIContainer.appendChild(knob);
 
   // ドラッグ動作
   let isDragging = false;
@@ -60,6 +49,7 @@ const createAvatarUI = (userId) => {
 
   const onMouseDown = (e) => {
     isDragging = true;
+    knob.style.cursor = "grabbing";
     startX = e.clientX;
     startLeft = parseInt(knob.style.left);
     document.body.style.userSelect = "none";
@@ -70,18 +60,19 @@ const createAvatarUI = (userId) => {
     const dx = e.clientX - startX;
     let newLeft = startLeft + dx;
     if (newLeft < 0) newLeft = 0;
-    if (newLeft > 130) newLeft = 130;
+    if (newLeft > window.innerWidth) newLeft = window.innerWidth;
     knob.style.left = newLeft + "px";
 
-    const normalized = (newLeft / 130) * 4 - 2;
+    const normalized = (newLeft / window.innerWidth) * 4 - 2;
     if (avatars[userId] && avatars[userId].scene) {
-      avatars[userId].vrm.scene.position.x = normalized;
+      avatars[userId].vrm.scene.position.x = normalized * 0.5;
     }
   };
 
   const onMouseUp = () => {
     isDragging = false;
     document.body.style.userSelect = "";
+    knob.style.cursor = "grab";
   };
 
   knob.addEventListener("mousedown", onMouseDown);
@@ -90,7 +81,7 @@ const createAvatarUI = (userId) => {
 
   // リスナー管理用に保持
   avatarsUI.set(userId, {
-    wrapper,
+    knob,
     listeners: [
       { target: knob, type: "mousedown", handler: onMouseDown },
       { target: window, type: "mousemove", handler: onMouseMove },
@@ -161,8 +152,8 @@ export const destroyAvatar = (userId) => {
       target.removeEventListener(type, handler);
     });
 
-    if (uiData.wrapper.parentNode) {
-      uiData.wrapper.parentNode.removeChild(uiData.wrapper);
+    if (uiData.knob.parentNode) {
+      uiData.knob.parentNode.removeChild(uiData.knob);
     }
 
     avatarsUI.delete(userId);
