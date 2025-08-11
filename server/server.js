@@ -54,7 +54,7 @@ wss.on("connection", (ws, req) => {
       const data = JSON.parse(msg.toString());
 
       if (data.type === "motion") {
-        sendMessage(JSON.stringify(data), ws);
+        sendMessage(JSON.stringify(data), ws, data.sendTo);
       }
 
       if (data.type === "name") {

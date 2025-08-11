@@ -92,6 +92,7 @@
           console.log("User Joined:", msg);
 
           if (!avatars[msg.userId]) {
+            sendName(storedName, msg.userId);
             loadAvatar(msg.userId, scene, { x: 0, y: 0, z: 0 });
           }
         },
@@ -123,8 +124,8 @@
         }
       };
 
-      const sendName = (name) => {
-        ws.sendName(userId, name);
+      const sendName = (name, sendTo) => {
+        ws.sendName(userId, name, sendTo);
       };
 
       const requestVrm = (requestTo) => {
