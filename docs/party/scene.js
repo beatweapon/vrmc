@@ -28,3 +28,17 @@ export const initScene = () => {
 
   return { scene, clock, camera, renderer };
 };
+
+const resize = () => {
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+
+  renderer.setSize(width, height);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  renderer.render(scene, camera);
+};
+
+window.addEventListener("resize", () => resize());
