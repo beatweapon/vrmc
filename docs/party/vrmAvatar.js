@@ -176,7 +176,7 @@ export class VRMAvatar {
         ? originalQuaternion.x
         : originalQuaternion.x * 0.3,
       -originalQuaternion.y * 0.5,
-      -originalQuaternion.z,
+      -originalQuaternion.z * 0.5,
       originalQuaternion.w,
     );
 
