@@ -79,7 +79,7 @@
         onJoin: (msg) => {
           msg.existingUserIds.forEach(async (id) => {
             if (!avatars[id]) {
-              if (storedName) sendName(userId, storedName);
+              if (storedName) sendName(storedName);
               loadAvatar(id, scene, { x: 0, y: 0, z: 0 });
               if (!(await existsOriginalAvatar(id))) {
                 console.log("Requesting VRM for user:", id);
