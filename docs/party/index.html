@@ -33,7 +33,7 @@
     </script>
     <script type="module">
       import * as vision from "@mediapipe/tasks-vision";
-      import { initScene } from "./scene.js";
+      import { initScene, resize, setBackgroundColor } from "./scene.js";
       import {
         loadAvatar,
         calculateBlendshapes,
@@ -177,6 +177,40 @@
         const arrayBuffer = await file.arrayBuffer();
         ws.sendVrm(userId, arrayBuffer);
         await changeAvatar(userId, arrayBuffer);
+      });
+
+      window.addEventListener("resize", () => resize());
+
+      const backgroundColors = [
+        0x00ff00, 0x00ffff, 0x0000ff, 0xff00ff, 0xff0000, 0xffff00,
+      ];
+
+      let backgroundColorIndex =
+        localStorage.getItem("backgroundColorIndex") || 0;
+
+      setBackgroundColor(backgroundColors[backgroundColorIndex]);
+
+      // Ctrl+左右矢印で背景色変更
+      window.addEventListener("keydown", async (event) => {
+        // Windows/Linux: Ctrlキー, Mac: Metaキー(Commandキー) どちらかが押されていればOK
+        if (!(event.ctrlKey || event.metaKey)) return;
+        if (event.key === "ArrowRight") {
+          backgroundColorIndex =
+            backgroundColorIndex === backgroundColors.length - 1
+              ? 0
+              : backgroundColorIndex + 1;
+        } else if (event.key === "ArrowLeft") {
+          backgroundColorIndex =
+            backgroundColorIndex === 0
+              ? backgroundColors.length - 1
+              : backgroundColorIndex - 1;
+        } else {
+          return;
+        }
+
+        setBackgroundColor(backgroundColors[backgroundColorIndex]);
+
+        localStorage.setItem("backgroundColorIndex", backgroundColorIndex);
       });
 
       initCamera().then((v) => startFaceTracking(v));

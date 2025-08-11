@@ -29,7 +29,7 @@ export const initScene = () => {
   return { scene, clock, camera, renderer };
 };
 
-const resize = () => {
+export const resize = () => {
   const width = window.innerWidth;
   const height = window.innerHeight;
   camera.aspect = width / height;
@@ -41,4 +41,6 @@ const resize = () => {
   renderer.render(scene, camera);
 };
 
-window.addEventListener("resize", () => resize());
+export const setBackgroundColor = async (color) => {
+  scene.background = new THREE.Color(color);
+};
