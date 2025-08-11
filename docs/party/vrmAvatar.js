@@ -16,6 +16,19 @@ export class VRMAvatar {
 
     const onLoaded = (vrmAvatar) => {
       vrmAvatar.vrm.scene.position.set(position.x, position.y, position.z);
+
+      const chest = vrmAvatar.vrm.humanoid.getNormalizedBoneNode("chest");
+      if (chest) {
+        const chestWorldPos = new THREE.Vector3();
+        chest.getWorldPosition(chestWorldPos);
+
+        // 揃えたい高さ（例：ワールド座標のY=1に胸を合わせる）
+        const targetChestY = 1.0;
+        const offsetY = targetChestY - chestWorldPos.y;
+
+        // VRM全体をオフセット
+        this.vrm.scene.position.y += offsetY;
+      }
     };
 
     this.loadModel(url, onLoaded);
