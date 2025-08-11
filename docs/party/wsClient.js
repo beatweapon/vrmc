@@ -39,6 +39,10 @@ export const connectWebSocket = (userId, handlers) => {
           // 新規ユーザー参加
           handlers.onUserJoined?.(msg);
         }
+        if (msg.type === "name") {
+          // ユーザー名変更
+          handlers.onChangeName?.(msg);
+        }
         if (msg.type === "motion" && msg.userId !== userId) {
           // 他人のモーション更新
           handlers.onReceiveMotion?.(msg);
@@ -60,6 +64,17 @@ export const connectWebSocket = (userId, handlers) => {
     sendMotion: (userId, faceData) => {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "motion", userId, data: faceData }));
+      }
+    },
+    sendName: (userId, name) => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: "name",
+            userId,
+            name,
+          }),
+        );
       }
     },
     requestVrm: (requestFrom, requestTo) => {

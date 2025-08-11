@@ -43,6 +43,7 @@
         updateAvatars,
         existsOriginalAvatar,
         getModelArrayBuffer,
+        updateAvatarName,
         avatars,
       } from "./avatarManager.js";
       import { connectWebSocket } from "./wsClient.js";
@@ -58,15 +59,27 @@
 
       const userId = getUserId();
 
+      const changeName = (name) => {
+        updateAvatarName(userId, name);
+      };
+
       const { scene, clock, camera, renderer } = initScene();
 
       loadAvatar(userId, scene, { x: 0, y: 0, z: 0 });
+
+      const nameInput = document.getElementById("name-input");
+      const storedName = localStorage.getItem("userName") || "";
+      if (storedName) {
+        nameInput.value = storedName;
+        updateAvatarName(userId, storedName);
+      }
 
       // WebSocket接続
       const handlers = {
         onJoin: (msg) => {
           msg.existingUserIds.forEach(async (id) => {
             if (!avatars[id]) {
+              if (storedName) sendName(userId, storedName);
               loadAvatar(id, scene, { x: 0, y: 0, z: 0 });
               if (!(await existsOriginalAvatar(id))) {
                 console.log("Requesting VRM for user:", id);
@@ -81,6 +94,9 @@
           if (!avatars[msg.userId]) {
             loadAvatar(msg.userId, scene, { x: 0, y: 0, z: 0 });
           }
+        },
+        onChangeName: (msg) => {
+          updateAvatarName(msg.userId, msg.name);
         },
         onReceiveVrm: async (userId, arrayBuffer) => {
           console.log("Received VRM for user:", userId);
@@ -105,6 +121,10 @@
         if (arrayBuffer) {
           ws.sendVrm(userId, arrayBuffer, msg.targetId);
         }
+      };
+
+      const sendName = (name) => {
+        ws.sendName(userId, name);
       };
 
       const requestVrm = (requestTo) => {
@@ -164,6 +184,13 @@
         renderer.render(scene, camera);
       };
 
+      nameInput.addEventListener("input", (e) => {
+        const newName = e.target.value.trim();
+        localStorage.setItem("userName", newName);
+        updateAvatarName(userId, newName);
+        sendName(userId, newName); // WebSocketで送信
+      });
+
       // ドラッグ＆ドロップ対応
       document.addEventListener("dragover", (e) => e.preventDefault());
       document.addEventListener("drop", async (e) => {
@@ -216,17 +243,12 @@
       initCamera().then((v) => startFaceTracking(v));
       animate();
     </script>
-    <div
-      id="avatar-ui-container"
-      style="
-        position: fixed;
-        top: 10px;
-        left: 10px;
-        z-index: 10;
-        color: white;
-        font-family: sans-serif;
-      "
-    ></div>
+    <input
+      id="name-input"
+      type="text"
+      placeholder="名前"
+      style="position: fixed"
+    />
     <video id="video" autoplay playsinline></video>
   </body>
 </html>

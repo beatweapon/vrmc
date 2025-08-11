@@ -57,6 +57,10 @@ wss.on("connection", (ws, req) => {
         sendMessage(JSON.stringify(data), ws);
       }
 
+      if (data.type === "name") {
+        sendMessage(JSON.stringify(data), ws);
+      }
+
       if (data.type === "requestVrm") {
         sendMessage(
           JSON.stringify({ type: "sendVrmTo", targetId: data.requestFrom }),

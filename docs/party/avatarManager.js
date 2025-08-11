@@ -90,15 +90,21 @@ const createAvatarUI = (userId) => {
   });
 };
 
+export const updateAvatarName = (userId, name) => {
+  const ui = avatarsUI.get(userId);
+  if (ui && ui.knob) {
+    ui.knob.textContent = name;
+  }
+};
+
 export const loadAvatar = async (userId, scene, position) => {
+  createAvatarUI(userId);
   const model = await db.loadData(userId);
   const url = model
     ? URL.createObjectURL(new Blob([model]))
     : DEFAULT_MODEL_URL;
 
   avatars[userId] = new VRMAvatar(url, scene, position);
-
-  createAvatarUI(userId);
 };
 
 export const existsOriginalAvatar = async (userId) => {
