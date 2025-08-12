@@ -189,7 +189,7 @@
         const newName = e.target.value.trim();
         localStorage.setItem("userName", newName);
         updateAvatarName(userId, newName);
-        sendName(userId, newName); // WebSocketで送信
+        sendName(newName); // WebSocketで送信
       });
 
       // ドラッグ＆ドロップ対応
