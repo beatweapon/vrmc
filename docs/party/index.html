@@ -214,30 +214,26 @@
       ];
 
       let backgroundColorIndex =
-        localStorage.getItem("backgroundColorIndex") || 0;
+        parseInt(localStorage.getItem("backgroundColorIndex"), 10) || 0;
 
       setBackgroundColor(backgroundColors[backgroundColorIndex]);
 
       // Ctrl+左右矢印で背景色変更
-      window.addEventListener("keydown", async (event) => {
-        // Windows/Linux: Ctrlキー, Mac: Metaキー(Commandキー) どちらかが押されていればOK
+      window.addEventListener("keydown", (event) => {
         if (!(event.ctrlKey || event.metaKey)) return;
+
         if (event.key === "ArrowRight") {
           backgroundColorIndex =
-            backgroundColorIndex === backgroundColors.length - 1
-              ? 0
-              : backgroundColorIndex + 1;
+            (backgroundColorIndex + 1) % backgroundColors.length;
         } else if (event.key === "ArrowLeft") {
           backgroundColorIndex =
-            backgroundColorIndex === 0
-              ? backgroundColors.length - 1
-              : backgroundColorIndex - 1;
+            (backgroundColorIndex - 1 + backgroundColors.length) %
+            backgroundColors.length;
         } else {
           return;
         }
 
         setBackgroundColor(backgroundColors[backgroundColorIndex]);
-
         localStorage.setItem("backgroundColorIndex", backgroundColorIndex);
       });
 
