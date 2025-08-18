@@ -36,7 +36,9 @@ const createAvatarUI = (userId) => {
   knob.style.alignItems = "center";
   knob.style.border = "#fff solid 1px";
   knob.style.position = "absolute";
-  knob.style.left = window.innerWidth / 2 + "px";
+  knob.style.left =
+    localStorage.getItem(`{positionX-${userId}}`) + "px" ||
+    window.innerWidth / 2 + "px";
   knob.style.transform = "translateX(-50%)";
   knob.textContent = userId.slice(0, 6);
 
@@ -73,6 +75,10 @@ const createAvatarUI = (userId) => {
     isDragging = false;
     document.body.style.userSelect = "";
     knob.style.cursor = "grab";
+    localStorage.setItem(
+      `{positionX-${userId}}`,
+      parseInt(knob.style.left, 10),
+    );
   };
 
   knob.addEventListener("mousedown", onMouseDown);
@@ -104,7 +110,15 @@ export const loadAvatar = async (userId, scene, position) => {
     ? URL.createObjectURL(new Blob([model]))
     : DEFAULT_MODEL_URL;
 
-  avatars[userId] = new VRMAvatar(url, scene, position);
+  const newLeft =
+    localStorage.getItem(`{positionX-${userId}}`) || window.innerWidth / 2;
+  const normalized = (newLeft / window.innerWidth) * 4 - 2;
+
+  avatars[userId] = await new VRMAvatar(url, scene, {
+    x: normalized * 0.5,
+    y: 0,
+    z: 0,
+  });
 };
 
 export const existsOriginalAvatar = async (userId) => {
