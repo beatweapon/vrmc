@@ -75,10 +75,8 @@ const createAvatarUI = (userId) => {
     isDragging = false;
     document.body.style.userSelect = "";
     knob.style.cursor = "grab";
-    localStorage.setItem(
-      `{positionX-${userId}}`,
-      parseInt(knob.style.left, 10),
-    );
+    const left = knob.style.left || window.innerWidth / 2;
+    localStorage.setItem(`{positionX-${userId}}`, parseInt(left, 10));
   };
 
   knob.addEventListener("mousedown", onMouseDown);
@@ -112,7 +110,10 @@ export const loadAvatar = async (userId, scene, position) => {
 
   const newLeft =
     localStorage.getItem(`{positionX-${userId}}`) || window.innerWidth / 2;
+  console.log(`Loading avatar for ${userId} at position: ${newLeft}px`);
   const normalized = (newLeft / window.innerWidth) * 4 - 2;
+  console.log(`Normalized position for ${userId}: ${window.innerWidth}`);
+  console.log(`Normalized position for ${userId}: ${normalized}`);
 
   avatars[userId] = await new VRMAvatar(url, scene, {
     x: normalized * 0.5,
