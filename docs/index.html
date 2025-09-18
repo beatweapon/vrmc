@@ -26,19 +26,20 @@
     <script type="importmap">
       {
         "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js",
-          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.166.1/examples/jsm/",
-          "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.2/+esm",
-          "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm"
+          "three": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/",
+          "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.webgpu.js",
+          "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.tsl.js",
+          "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.min.js",
+          "@pixiv/three-vrm/nodes": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/nodes/index.module.js",
+          "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/+esm"
         }
       }
     </script>
     <script type="module">
-      import * as THREE from "three";
-      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-      import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
-      import { FilesetResolver, FaceLandmarker } from "@mediapipe/tasks-vision";
+      import * as vision from "@mediapipe/tasks-vision";
+      import { initScene, resize, setBackgroundColor } from "./scene.js";
+      import { VRMAvatar } from "./vrmAvatar.js";
       import indexedDB from "./indexedDB.js";
 
       const STORE_KEYS = {
@@ -46,388 +47,73 @@
         CURRENT_VRM: "currentVrm",
       };
 
-      // renderer
-      const renderer = new THREE.WebGLRenderer();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.setPixelRatio(window.devicePixelRatio);
-      document.body.appendChild(renderer.domElement);
-
-      // camera
-      const camera = new THREE.PerspectiveCamera(
-        30.0,
-        window.innerWidth / window.innerHeight,
-        0.1,
-        20.0,
-      );
-      camera.position.set(0.0, 1.5, 1.5);
-
-      // camera controls
-      const controls = new OrbitControls(camera, renderer.domElement);
-      controls.screenSpacePanning = true;
-      controls.target.set(0.0, 1.5, 0.0);
-      controls.update();
-
-      // scene
-      const scene = new THREE.Scene();
-      indexedDB
-        .loadData(STORE_KEYS.BACK_GROUND_COLOR)
-        .then((backGroundColor) => {
-          scene.background = new THREE.Color(backGroundColor);
-          // 配列内のindexをセット
-          const index = backgroundColor.findIndex((c) => c === backGroundColor);
-          if (index !== -1) {
-            backgroundColorIndex = index;
-          }
-        })
-        .catch(() => {
-          scene.background = new THREE.Color(0x00ff00);
-          backgroundColorIndex = 0;
-        });
-
-      // light
-      const light = new THREE.AmbientLight(0xffffff, Math.PI);
-      light.position.set(1.0, 1.0, 1.0).normalize();
-      scene.add(light);
-
-      // gltf and vrm
-      let currentVrm = undefined;
-
-      let lookAtTarget = new THREE.Object3D();
-      lookAtTarget.position.z = 10;
-      scene.add(lookAtTarget);
-
-      const loader = new GLTFLoader();
-      loader.crossOrigin = "anonymous";
-
-      loader.register((parser) => {
-        return new VRMLoaderPlugin(parser);
-      });
-
-      const resize = () => {
-        const width = window.innerWidth;
-        const height = window.innerHeight;
-        camera.aspect = width / height;
-        camera.updateProjectionMatrix();
-
-        renderer.setSize(width, height);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-
-        renderer.render(scene, camera);
-      };
+      const { scene, clock, camera, renderer } = initScene();
 
       window.addEventListener("resize", () => resize());
 
+      const video = document.getElementById("video");
+
+      const initCamera = async () => {
+        video.srcObject = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
+        return new Promise((r) => (video.onloadedmetadata = () => r(video)));
+      };
+
+      let avatar;
       const load = (url) => {
-        loader.load(
-          url,
+        avatar = new VRMAvatar(url, scene);
+      };
 
-          (gltf) => {
-            const vrm = gltf.userData.vrm;
+      const changeAvatar = (url) => {
+        if (!avatar) return;
+        avatar.changeModel(url);
+      };
 
-            // calling these functions greatly improves the performance
-            VRMUtils.removeUnnecessaryVertices(gltf.scene);
-            VRMUtils.removeUnnecessaryJoints(gltf.scene);
+      const startFaceTracking = async (video) => {
+        const { FaceLandmarker, FilesetResolver } = vision;
 
-            if (currentVrm) {
-              scene.remove(currentVrm.scene);
-              VRMUtils.deepDispose(currentVrm.scene);
-            }
-
-            // Disable frustum culling
-            vrm.scene.traverse((obj) => {
-              obj.frustumCulled = false;
-            });
-
-            adjustArmsToIPose(vrm);
-            vrm.lookAt.target = lookAtTarget;
-            vrm.update(0);
-
-            currentVrm = vrm;
-            scene.add(vrm.scene);
-
-            console.log(vrm);
-          },
-
-          (progress) =>
-            console.log(
-              "Loading model...",
-              100.0 * (progress.loaded / progress.total),
-              "%",
-            ),
-
-          (error) => console.error(error),
+        const filesetResolver = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm",
         );
-      };
+        const faceLandmarker = await FaceLandmarker.createFromOptions(
+          filesetResolver,
+          {
+            baseOptions: {
+              modelAssetPath:
+                "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+              delegate: "GPU",
+            },
+            outputFaceBlendshapes: true,
+            outputFacialTransformationMatrixes: true,
+            numFaces: 1,
+            runningMode: "VIDEO",
+          },
+        );
 
-      // Adjust arms to I-pose function
-      const adjustArmsToIPose = (vrm) => {
-        const leftUpperArm = vrm.humanoid.getNormalizedBoneNode("leftUpperArm");
-        const rightUpperArm =
-          vrm.humanoid.getNormalizedBoneNode("rightUpperArm");
-        if (leftUpperArm) {
-          leftUpperArm.rotation.z = -Math.PI / 2.5; // Rotate left arm down
-        }
-        if (rightUpperArm) {
-          rightUpperArm.rotation.z = Math.PI / 2.5; // Rotate right arm down
-        }
+        const detect = async () => {
+          const result = await faceLandmarker.detectForVideo(
+            video,
+            performance.now(),
+          );
+          if (result.faceLandmarks?.length > 0) {
+            const blendshapeData = avatar.calculateBlendshapes(result);
+            if (blendshapeData) {
+              avatar.applyBlendshapes(blendshapeData);
+            }
+          }
+          requestAnimationFrame(detect);
+        };
+        detect();
       };
-
-      // animate
-      const clock = new THREE.Clock();
-      clock.start();
 
       const animate = () => {
         requestAnimationFrame(animate);
-
-        // render
+        avatar.vrm.update(clock.getDelta());
         renderer.render(scene, camera);
       };
 
-      let faceLandmarker;
-      let video;
-
-      const detectFaceLandmarks = (time) => {
-        if (!faceLandmarker) {
-          return;
-        }
-        const landmarks = faceLandmarker.detectForVideo(video, time);
-
-        // Apply transformation
-        const transformationMatrices = landmarks.facialTransformationMatrixes;
-        if (transformationMatrices && transformationMatrices.length > 0) {
-          const matrix = new THREE.Matrix4().fromArray(
-            transformationMatrices[0].data,
-          );
-          const originalQuaternion =
-            new THREE.Quaternion().setFromRotationMatrix(matrix);
-
-          const reflectQuaternion = new THREE.Quaternion(
-            originalQuaternion.x > 0
-              ? originalQuaternion.x
-              : originalQuaternion.x * 0.3,
-            -originalQuaternion.y * 0.5,
-            -originalQuaternion.z,
-            originalQuaternion.w,
-          );
-
-          if (currentVrm) {
-            const spineBone =
-              currentVrm.humanoid.getNormalizedBoneNode("spine");
-            const neckBone = currentVrm.humanoid.getNormalizedBoneNode("neck");
-
-            spineBone.quaternion.slerp(
-              adjustQuaternionAngleRatio(reflectQuaternion, 0.6),
-              0.3,
-            );
-            neckBone.quaternion
-              .copy(spineBone.quaternion)
-              .multiply(adjustQuaternionAngleRatio(reflectQuaternion, 0.2));
-          }
-        }
-
-        // Apply Blendshapes
-        const blendshapes = landmarks.faceBlendshapes;
-        if (blendshapes && blendshapes.length > 0) {
-          const coefsMap = retarget(blendshapes);
-          updateBlendshapes(landmarks, coefsMap);
-        }
-      };
-
-      const adjustQuaternionAngleRatio = (quaternion, ratio) => {
-        return new THREE.Quaternion(
-          quaternion.x * ratio,
-          quaternion.y * ratio,
-          quaternion.z * ratio,
-          quaternion.w,
-        );
-      };
-
-      const updateBlendshapes = (landmarks, blendshapes) => {
-        updateFace(landmarks, blendshapes);
-
-        const deltaTime = clock.getDelta();
-
-        currentVrm.update(deltaTime);
-      };
-
-      const updateFace = (landmarks, blendshapes) => {
-        if (!currentVrm) {
-          return;
-        }
-
-        updateBlink(blendshapes);
-        updateEye(blendshapes);
-        updateMouth(landmarks, blendshapes);
-        updateFacial(blendshapes);
-      };
-
-      const updateEye = (blendshapes) => {
-        const rightEyeLookRight =
-          (blendshapes.get("eyeLookOutRight") || 0) -
-          (blendshapes.get("eyeLookInRight") || 0);
-        const leftEyeLookRight =
-          (blendshapes.get("eyeLookInLeft") || 0) -
-          (blendshapes.get("eyeLookOutLeft") || 0);
-
-        const rightEyeLookUp =
-          (blendshapes.get("eyeLookUpRight") || 0) -
-          (blendshapes.get("eyeLookDownRight") || 0);
-        const leftEyeLookUp =
-          (blendshapes.get("eyeLookUpLeft") || 0) -
-          (blendshapes.get("eyeLookDownLeft") || 0);
-
-        lookAtTarget.position.x =
-          (10 * (rightEyeLookRight + leftEyeLookRight)) / 2;
-        lookAtTarget.position.y =
-          1.7 + (10 * (rightEyeLookUp + leftEyeLookUp)) / 2;
-      };
-
-      const updateBlink = (blendshapes) => {
-        const blink = Math.max(
-          blendshapes.get("eyeBlinkLeft"),
-          blendshapes.get("eyeBlinkRight"),
-        );
-        currentVrm.expressionManager.setValue("blinkLeft", (blink - 0.5) * 2);
-        currentVrm.expressionManager.setValue("blinkRight", (blink - 0.5) * 2);
-      };
-
-      const updateMouth = (landmarks, blendshapes) => {
-        const UPPER_LIP_BOTTOM_INDEX = 13;
-        const UNDER_LIP_TOP_INDEX = 14;
-        const mouthOpen =
-          (landmarks.faceLandmarks[0][UPPER_LIP_BOTTOM_INDEX].y -
-            landmarks.faceLandmarks[0][UNDER_LIP_TOP_INDEX].y) *
-          -1;
-        currentVrm.expressionManager.setValue("aa", mouthOpen * 20);
-
-        const mouthPucker = blendshapes.get("mouthPucker");
-        const ou = (mouthPucker - 0.5) * 2;
-        if (ou > 0) {
-          currentVrm.expressionManager.setValue("ou", ou);
-          // currentVrm.expressionManager.setValue("ee", 0);
-          // currentVrm.expressionManager.setValue("aa", 0);
-        } else {
-          currentVrm.expressionManager.setValue("ou", 0);
-        }
-
-        const mouthFunnel = blendshapes.get("mouthFunnel");
-        if (mouthFunnel > 0.2) {
-          currentVrm.expressionManager.setValue("oh", mouthFunnel);
-        } else {
-          currentVrm.expressionManager.setValue("oh", 0);
-        }
-      };
-
-      const updateFacial = (blendshapes) => {
-        currentVrm.expressionManager.setValue("neutral", 0);
-
-        const browInnerUp = blendshapes.get("browInnerUp");
-        if (browInnerUp > 0.7) {
-          currentVrm.expressionManager.setValue("surprised", browInnerUp);
-        } else {
-          currentVrm.expressionManager.setValue("surprised", 0);
-        }
-
-        const mouthSmileRight = blendshapes.get("mouthSmileRight");
-        const mouthSmileLeft = blendshapes.get("mouthSmileLeft");
-        const happy = (mouthSmileRight || 0) + (mouthSmileLeft || 0) - 0.8;
-        if (happy > 0) {
-          currentVrm.expressionManager.setValue("blinkLeft", happy * 4);
-          currentVrm.expressionManager.setValue("blinkRight", happy * 4);
-          // currentVrm.expressionManager.setValue("happy", happy);
-          currentVrm.expressionManager.setValue("surprised", 0);
-        } else {
-          currentVrm.expressionManager.setValue("happy", 0);
-        }
-
-        currentVrm.expressionManager.setValue(
-          "neutral",
-          0.5 -
-            Math.max(
-              currentVrm.expressionManager.getValue("aa"),
-              currentVrm.expressionManager.getValue("ee"),
-              currentVrm.expressionManager.getValue("ou"),
-              currentVrm.expressionManager.getValue("oh"),
-            ),
-        );
-      };
-
-      const retarget = (blendshapes) => {
-        const categories = blendshapes[0].categories;
-        let coefsMap = new Map();
-        categories.forEach((blendshape) => {
-          // Adjust certain blendshape values to be less prominent.
-          switch (blendshape.categoryName) {
-            case "eyeBlinkLeft":
-              blendshape.score *= 1.2;
-              break;
-            case "eyeBlinkRight":
-              blendshape.score *= 1.2;
-              break;
-            default:
-          }
-          coefsMap.set(blendshape.categoryName, blendshape.score);
-        });
-
-        return coefsMap;
-      };
-
-      const onVideoFrame = (time) => {
-        // Do something with the frame.
-        detectFaceLandmarks(time);
-        // Re-register the callback to be notified about the next frame.
-        video.requestVideoFrameCallback(onVideoFrame);
-      };
-
-      // Stream webcam into landmarker loop (and also make video visible)
-      const streamWebcamThroughFaceLandmarker = async () => {
-        video = document.getElementById("video");
-
-        const onAcquiredUserMedia = (stream) => {
-          video.srcObject = stream;
-          video.onloadedmetadata = () => {
-            video.play();
-          };
-        };
-
-        try {
-          const evt = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: {
-              facingMode: "user",
-              width: 1280,
-              height: 720,
-            },
-          });
-          onAcquiredUserMedia(evt);
-          video.requestVideoFrameCallback(onVideoFrame);
-        } catch (e) {
-          console.error(`Failed to acquire camera feed: ${e}`);
-        }
-      };
-
-      const loadMediapipeModel = async () => {
-        await streamWebcamThroughFaceLandmarker();
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm",
-        );
-        faceLandmarker = await FaceLandmarker.createFromModelPath(
-          vision,
-          "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
-        );
-        await faceLandmarker.setOptions({
-          baseOptions: {
-            delegate: "GPU",
-          },
-          runningMode: "VIDEO",
-          outputFaceBlendshapes: true,
-          outputFacialTransformationMatrixes: true,
-        });
-
-        console.log("Finished Loading MediaPipe Model.");
-      };
-
-      const backgroundColor = [
+      const backgroundColors = [
         0x00ff00, 0x00ffff, 0x0000ff, 0xff00ff, 0xff0000, 0xffff00,
       ];
       let backgroundColorIndex = 0;
@@ -436,25 +122,23 @@
       window.addEventListener("keydown", async (event) => {
         // Windows/Linux: Ctrlキー, Mac: Metaキー(Commandキー) どちらかが押されていればOK
         if (!(event.ctrlKey || event.metaKey)) return;
+
         if (event.key === "ArrowRight") {
           backgroundColorIndex =
-            backgroundColorIndex === backgroundColor.length - 1
-              ? 0
-              : backgroundColorIndex + 1;
+            (backgroundColorIndex + 1) % backgroundColors.length;
         } else if (event.key === "ArrowLeft") {
           backgroundColorIndex =
-            backgroundColorIndex === 0
-              ? backgroundColor.length - 1
-              : backgroundColorIndex - 1;
+            (backgroundColorIndex - 1 + backgroundColors.length) %
+            backgroundColors.length;
         } else {
           return;
         }
-        scene.background = new THREE.Color(
-          backgroundColor[backgroundColorIndex],
-        );
+
+        setBackgroundColor(backgroundColors[backgroundColorIndex]);
+
         await indexedDB.saveData(
           STORE_KEYS.BACK_GROUND_COLOR,
-          backgroundColor[backgroundColorIndex],
+          backgroundColors[backgroundColorIndex],
         );
       });
 
@@ -479,11 +163,28 @@
 
         const blob = new Blob([file], { type: "application/octet-stream" });
         const url = URL.createObjectURL(blob);
-        load(url);
+        changeAvatar(url);
         indexedDB.saveFile(STORE_KEYS.CURRENT_VRM, file);
       });
 
       const start = async () => {
+        indexedDB
+          .loadData(STORE_KEYS.BACK_GROUND_COLOR)
+          .then((backGroundColor) => {
+            setBackgroundColor(backGroundColor);
+            // 配列内のindexをセット
+            const index = backgroundColors.findIndex(
+              (c) => c === backGroundColor,
+            );
+            if (index !== -1) {
+              backgroundColorIndex = index;
+            }
+          })
+          .catch(() => {
+            setBackgroundColor(0x00ff00);
+            backgroundColorIndex = 0;
+          });
+
         indexedDB
           .loadData(STORE_KEYS.CURRENT_VRM)
           .then((file) => {
@@ -495,8 +196,8 @@
             load("./models/VRM1_Constraint_Twist_Sample.vrm");
           });
 
+        initCamera().then((v) => startFaceTracking(v));
         animate();
-        loadMediapipeModel();
       };
 
       await start();
