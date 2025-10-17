@@ -36,7 +36,19 @@ export const initScene = () => {
 
   document.body.appendChild(renderer.domElement);
 
-  scene.add(new THREE.AmbientLight(0xffffff, Math.PI));
+  // Ambient light: slightly stronger to recover perceived brightness
+  scene.add(new THREE.AmbientLight(0xffffff, 1.6));
+  // Add a hemisphere light for soft sky/fill lighting
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+  hemi.position.set(0, 1, 0);
+  scene.add(hemi);
+  // Add a directional key light to give some shape to the avatar
+  const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+  dir.position.set(0, 3, 1);
+  dir.target.position.set(0, DEFAULT_FOCUS_Y, 0);
+  scene.add(dir);
+  // Add the target to the scene so the light points correctly
+  scene.add(dir.target);
 
   return { scene, clock, camera, renderer };
 };
