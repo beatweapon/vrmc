@@ -2,24 +2,36 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 let scene, clock, camera, renderer;
+// Smaller frustum gives a closer "bust-up" framing for the avatar
+const FRUSTUM_SIZE = 0.8;
+// default focus (where the camera looks at) and how much higher the camera sits above it
+const DEFAULT_FOCUS_Y = 1.5;
+const CAMERA_OFFSET_Y = 0; // camera.y = focusY + CAMERA_OFFSET_Y
 
 export const initScene = () => {
   scene = new THREE.Scene();
   clock = new THREE.Clock();
-  camera = new THREE.PerspectiveCamera(
-    30,
-    window.innerWidth / window.innerHeight,
+  const aspect = window.innerWidth / window.innerHeight;
+  const halfHeight = FRUSTUM_SIZE / 2;
+  const halfWidth = halfHeight * aspect;
+  camera = new THREE.OrthographicCamera(
+    -halfWidth,
+    halfWidth,
+    halfHeight,
+    -halfHeight,
     0.1,
     20,
   );
-  camera.position.set(0, 1.4, 1.5);
+  // move camera closer on Z and raise it to show chest-up (higher vantage)
+  camera.position.set(0, DEFAULT_FOCUS_Y + CAMERA_OFFSET_Y, 1.0);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   // camera controls
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.screenSpacePanning = true;
-  controls.target.set(0.0, 1.5, 0.0);
+  // initial target slightly lower than camera to show chest and head
+  controls.target.set(0.0, DEFAULT_FOCUS_Y, 0.0);
   controls.update();
 
   document.body.appendChild(renderer.domElement);
@@ -32,7 +44,13 @@ export const initScene = () => {
 export const resize = () => {
   const width = window.innerWidth;
   const height = window.innerHeight;
-  camera.aspect = width / height;
+  const aspect = width / height;
+  const halfHeight = FRUSTUM_SIZE / 2;
+  const halfWidth = halfHeight * aspect;
+  camera.left = -halfWidth;
+  camera.right = halfWidth;
+  camera.top = halfHeight;
+  camera.bottom = -halfHeight;
   camera.updateProjectionMatrix();
 
   renderer.setSize(width, height);
