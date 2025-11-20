@@ -66,7 +66,11 @@
       };
 
       const changeAvatar = (url) => {
-        if (!avatar) return;
+        if (!avatar) {
+          // If no avatar instance exists yet, load the given model instead
+          load(url);
+          return;
+        }
         avatar.changeModel(url);
       };
 
@@ -96,7 +100,7 @@
             video,
             performance.now(),
           );
-          if (result.faceLandmarks?.length > 0) {
+          if (result.faceLandmarks?.length > 0 && avatar) {
             const blendshapeData = avatar.calculateBlendshapes(result);
             if (blendshapeData) {
               avatar.applyBlendshapes(blendshapeData);
@@ -109,7 +113,14 @@
 
       const animate = () => {
         requestAnimationFrame(animate);
-        avatar.vrm.update(clock.getDelta());
+        // Only update the avatar when it's ready to avoid throwing errors
+        if (avatar?.vrm) {
+          try {
+            avatar.vrm.update(clock.getDelta());
+          } catch (e) {
+            console.warn("avatar.vrm.update failed:", e);
+          }
+        }
         renderer.render(scene, camera);
       };
 
