@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VRMC Studio — みんなで同じポーズ</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script type="importmap">
+      {"imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/",
+        "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.5/lib/three-vrm.module.min.js",
+        "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs"
+      }}
+    </script>
+  </head>
+  <body>
+    <header><a href="../">VRMC</a><span>STUDIO</span><p>みんなで、同じポーズ。</p></header>
+    <main>
+      <section id="stage" aria-label="撮影プレビュー">
+        <div id="empty"><h1>アバターを並べよう</h1><p>複数のVRMをここにドロップ<br />または右のボタンから追加してください。</p><p>1台のカメラで、全員の表情と頭の動きをそろえます。</p></div>
+        <div class="stage-label">LIVE PREVIEW <span id="pose-state">カメラ停止中</span></div>
+      </section>
+      <aside>
+        <section><h2>01 / アバター</h2><label class="button primary" for="files">＋ VRMを追加</label><input id="files" type="file" accept=".vrm" multiple hidden /><button id="sample">サンプルを追加</button><p class="hint">複数選択できます。ファイルは端末内で処理します。</p><ul id="avatars"></ul></section>
+        <section><h2>02 / ポーズ</h2><button id="camera">カメラを開始</button><button id="freeze" disabled>ポーズを固定</button><p class="hint">顔・表情・頭の傾きを全員に反映します。腕や脚の全身追跡は含みません。</p></section>
+        <section><h2>03 / 構図と保存</h2><label>アバターの間隔<input id="spacing" type="range" min="0.4" max="2" step="0.05" value="0.85" /></label><label>背景色<input id="background" type="color" value="#e9e5df" /></label><label class="check"><input id="transparent" type="checkbox" />背景を透過して保存</label><button id="fit">全員を画面に収める</button><p class="hint">ドラッグで回転、スクロールで拡大。タッチ操作にも対応。</p><button id="save" class="primary" disabled>PNGを保存</button><p class="hint">プレビューと同じ構図で、操作パネルを除いて保存します。</p></section>
+        <p id="status" role="status" aria-live="polite">VRMを追加して撮影を始めましょう。</p>
+      </aside>
+    </main>
+    <video id="video" muted playsinline aria-hidden="true"></video>
+    <script src="../diagnostics.js"></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
