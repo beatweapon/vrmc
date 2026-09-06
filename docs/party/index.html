@@ -137,7 +137,9 @@
         video.srcObject = await navigator.mediaDevices.getUserMedia({
           video: true,
         });
-        return new Promise((r) => (video.onloadedmetadata = () => r(video)));
+        // Explicit playback also starts hidden camera video on iOS.
+        await video.play();
+        return video;
       };
 
       const startFaceTracking = async (video) => {
@@ -246,6 +248,6 @@
       placeholder="名前"
       style="position: fixed"
     />
-    <video id="video" autoplay playsinline></video>
+    <video id="video" autoplay muted playsinline></video>
   </body>
 </html>

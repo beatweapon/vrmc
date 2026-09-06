@@ -54,7 +54,9 @@
         video.srcObject = await navigator.mediaDevices.getUserMedia({
           video: true,
         });
-        return new Promise((r) => (video.onloadedmetadata = () => r(video)));
+        // Explicit playback also starts hidden camera video on iOS.
+        await video.play();
+        return video;
       };
 
       let avatar;
@@ -212,6 +214,6 @@
       await start();
     </script>
 
-    <video autoplay playsinline id="video"><track kind="captions" /></video>
+    <video autoplay muted playsinline id="video"><track kind="captions" /></video>
   </body>
 </html>
