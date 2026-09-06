@@ -1,5 +1,5 @@
 // const SERVER_URL = "ws://localhost:3000";
-const SERVER_URL = "wss://smart-rare-cub.ngrok-free.app";
+const SERVER_URL = "wss://vrmc.onrender.com";
 
 export const connectWebSocket = (userId, handlers) => {
   let ws;
