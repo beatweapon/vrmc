@@ -12,6 +12,6 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "ws": "^8.18.3"
+    "ws": "^8.21.3"
   }
 }

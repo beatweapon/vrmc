@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-let scene, clock, camera, renderer;
+let scene, timer, camera, renderer;
 // Smaller frustum gives a closer "bust-up" framing for the avatar
 const FRUSTUM_SIZE = 0.8;
 // default focus (where the camera looks at) and how much higher the camera sits above it
@@ -10,7 +10,8 @@ const CAMERA_OFFSET_Y = 0; // camera.y = focusY + CAMERA_OFFSET_Y
 
 export const initScene = () => {
   scene = new THREE.Scene();
-  clock = new THREE.Clock();
+  timer = new THREE.Timer();
+  timer.connect(document);
   const aspect = window.innerWidth / window.innerHeight;
   const halfHeight = FRUSTUM_SIZE / 2;
   const halfWidth = halfHeight * aspect;
@@ -50,7 +51,7 @@ export const initScene = () => {
   // Add the target to the scene so the light points correctly
   scene.add(dir.target);
 
-  return { scene, clock, camera, renderer };
+  return { scene, timer, camera, renderer };
 };
 
 export const resize = () => {

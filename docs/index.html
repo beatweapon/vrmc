@@ -26,13 +26,10 @@
     <script type="importmap">
       {
         "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.module.js",
-          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/",
-          "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.webgpu.js",
-          "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.tsl.js",
-          "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.min.js",
-          "@pixiv/three-vrm/nodes": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/nodes/index.module.js",
-          "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/+esm"
+          "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/",
+          "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.5/lib/three-vrm.module.min.js",
+          "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs"
         }
       }
     </script>
@@ -47,7 +44,7 @@
         CURRENT_VRM: "currentVrm",
       };
 
-      const { scene, clock, camera, renderer } = initScene();
+      const { scene, timer, camera, renderer } = initScene();
 
       window.addEventListener("resize", () => resize());
 
@@ -78,7 +75,7 @@
         const { FaceLandmarker, FilesetResolver } = vision;
 
         const filesetResolver = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm",
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm",
         );
         const faceLandmarker = await FaceLandmarker.createFromOptions(
           filesetResolver,
@@ -113,10 +110,11 @@
 
       const animate = () => {
         requestAnimationFrame(animate);
+        timer.update();
         // Only update the avatar when it's ready to avoid throwing errors
         if (avatar?.vrm) {
           try {
-            avatar.vrm.update(clock.getDelta());
+            avatar.vrm.update(timer.getDelta());
           } catch (e) {
             console.warn("avatar.vrm.update failed:", e);
           }

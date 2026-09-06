@@ -2,13 +2,11 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   VRMLoaderPlugin,
-  MToonMaterialLoaderPlugin,
   VRMUtils,
 } from "@pixiv/three-vrm";
-import { MToonNodeMaterial } from "@pixiv/three-vrm/nodes";
 
 export class VRMAvatar {
-  constructor(url, scene, position) {
+  constructor(url, scene, position = {}) {
     this.scene = scene;
     this.vrm = null;
     this.leftIris = null;
@@ -24,12 +22,7 @@ export class VRMAvatar {
   loadModel(url, onLoaded) {
     const loader = new GLTFLoader();
     loader.crossOrigin = "anonymous";
-    loader.register((parser) => {
-      const mtoonMaterialPlugin = new MToonMaterialLoaderPlugin(parser, {
-        materialType: MToonNodeMaterial,
-      });
-      return new VRMLoaderPlugin(parser, mtoonMaterialPlugin);
-    });
+    loader.register((parser) => new VRMLoaderPlugin(parser));
 
     loader.load(
       url,

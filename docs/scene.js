@@ -1,11 +1,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-let scene, clock, camera, renderer;
+let scene, timer, camera, renderer;
 
 export const initScene = () => {
   scene = new THREE.Scene();
-  clock = new THREE.Clock();
+  timer = new THREE.Timer();
+  timer.connect(document);
   camera = new THREE.PerspectiveCamera(
     30,
     window.innerWidth / window.innerHeight,
@@ -26,7 +27,7 @@ export const initScene = () => {
 
   scene.add(new THREE.AmbientLight(0xffffff, Math.PI));
 
-  return { scene, clock, camera, renderer };
+  return { scene, timer, camera, renderer };
 };
 
 export const resize = () => {
