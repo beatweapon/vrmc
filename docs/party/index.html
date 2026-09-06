@@ -18,6 +18,7 @@
     </style>
   </head>
   <body>
+    <script src="../diagnostics.js"></script>
     <script type="importmap">
       {
         "imports": {
@@ -60,7 +61,10 @@
         updateAvatarName(userId, name);
       };
 
+      const diagnostics = window.vrmDiagnostics;
+      diagnostics.stage("シーン初期化");
       const { scene, timer, camera, renderer } = initScene();
+      diagnostics.renderer(renderer);
 
       loadAvatar(userId, scene, { x: 0, y: 0, z: 0 });
 
@@ -132,22 +136,28 @@
       };
 
       const video = document.getElementById("video");
+      diagnostics.camera(video);
 
       const initCamera = async () => {
+        diagnostics.stage("カメラ許可待ち");
         video.srcObject = await navigator.mediaDevices.getUserMedia({
           video: true,
         });
         // Explicit playback also starts hidden camera video on iOS.
+        diagnostics.stage("動画の再生開始待ち");
         await video.play();
+        diagnostics.stage("動画再生開始済み");
         return video;
       };
 
       const startFaceTracking = async (video) => {
         const { FaceLandmarker, FilesetResolver } = vision;
 
+        diagnostics.stage("MediaPipe WASM準備中");
         const filesetResolver = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm",
         );
+        diagnostics.stage("顔検出モデル初期化中（GPU）");
         const faceLandmarker = await FaceLandmarker.createFromOptions(
           filesetResolver,
           {
@@ -163,11 +173,14 @@
           },
         );
 
+        diagnostics.stage("顔検出モデル準備完了");
         const detect = async () => {
+          diagnostics.detectionStart();
           const result = await faceLandmarker.detectForVideo(
             video,
             performance.now(),
           );
+          diagnostics.detectionEnd(result);
           if (result.faceLandmarks?.length > 0) {
             const blendshapeData = calculateBlendshapes(userId, result);
             if (blendshapeData) {
@@ -175,6 +188,7 @@
               ws.sendMotion(userId, blendshapeData);
             }
           }
+          diagnostics.detectionApplied();
           requestAnimationFrame(detect);
         };
         detect();
@@ -185,6 +199,7 @@
         timer.update();
         updateAvatars(timer.getDelta());
         renderer.render(scene, camera);
+        diagnostics.frame();
       };
 
       nameInput.addEventListener("input", (e) => {

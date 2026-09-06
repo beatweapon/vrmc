@@ -1,7 +1,8 @@
-const CACHE_NAME = "static-cache-v1.8.1";
+const CACHE_NAME = "static-cache-v1.8.2";
 const FILES_TO_CACHE = [
   "./",
   "./index.html",
+  "./diagnostics.js",
   "./indexedDB.js",
   "./assets/icons/icon_180.png",
   "./assets/icons/icon_192.png",
