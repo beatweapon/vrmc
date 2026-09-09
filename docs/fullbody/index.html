@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#14191e" />
+  <title>VRMC Full Body — 全身で、伝える。</title>
+  <link rel="icon" href="../assets/icons/icon_16.png" />
+  <link rel="stylesheet" href="./style.css" />
+  <script type="importmap">{"imports":{
+    "three":"https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+    "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/",
+    "@pixiv/three-vrm":"https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.5/lib/three-vrm.module.min.js"
+  }}</script>
+  <script>if(new URLSearchParams(location.search).get('output')==='1')document.documentElement.classList.add('output');</script>
+</head>
+<body>
+  <header class="app-header"><a class="brand" href="../">VRMC<span>FULL BODY</span></a><span class="edition">WEBCAM MOTION STUDIO</span><button id="output" class="primary">配信用ウィンドウを開く ↗</button></header>
+  <main>
+    <section class="workspace">
+      <div class="workspace-heading"><div><p class="eyebrow">YOUR VIRTUAL STAGE</p><h1>全身で、伝える。</h1></div><span id="connection" class="badge">カメラ停止中</span></div>
+      <div id="stage" aria-label="アバターのプレビュー">
+        <div class="stage-top"><span class="stage-tag">AVATAR PREVIEW</span><span id="model-name">サンプルを準備中</span></div>
+        <div id="loading" role="status">アバターを読み込んでいます…</div>
+        <div class="camera-preview" id="camera-preview" hidden><video id="video" autoplay muted playsinline></video><canvas id="landmarks"></canvas><span>CAMERA · 端末内のみ</span></div>
+        <div class="stage-bottom"><span>ドラッグで回転 · ホイールで拡大</span><button id="fit" class="glass">全身を画面に収める</button></div>
+      </div>
+      <div class="transport"><button id="camera" class="primary">カメラを開始</button><button id="freeze" aria-pressed="false" disabled>ポーズを固定</button><div class="signals"><span id="face-state">顔 —</span><span id="body-state">体 —</span><span id="hands-state">手 —</span><span id="fps">— fps</span><span id="latency"></span></div></div>
+      <p id="status" role="status" aria-live="polite">カメラに頭からつま先まで映る位置で始めましょう。</p>
+      <div class="guide"><span class="guide-number">01</span><p><strong>アバターを選ぶ</strong><span>VRMをドロップ、または右のボタンから。</span></p><span class="guide-number">02</span><p><strong>カメラと基準を合わせる</strong><span>正面・開眼・閉眼の3ステップ。</span></p><span class="guide-number">03</span><p><strong>OBSへ</strong><span>配信用ウィンドウをキャプチャ。</span></p></div>
+    </section>
+    <aside aria-label="トラッキング設定">
+      <section class="panel"><h2><span>01</span>アバターとカメラ</h2><label class="button secondary" for="files">＋ VRMファイルを選択</label><input id="files" type="file" accept=".vrm" hidden /><button id="sample" class="text-button">サンプルに戻す</button><p class="hint">VRM 0.x / 1.0対応。モデルと映像は端末内で処理します。</p><label class="check"><input data-setting="mirrorAvatar" type="checkbox" />アバターを鏡表示</label><p class="hint">配信用ウィンドウとPNGにも同じ向きで反映します。</p><label>使用するカメラ<select id="cameraId"><option value="">既定のカメラ</option></select></label><label>追跡の品質<select data-setting="quality"><option value="balanced">標準 · 全身の精度を優先</option><option value="light">軽量 · 動作速度を優先</option></select></label><div class="check-row"><label><input data-setting="mirrorPreview" type="checkbox" />カメラ映像を鏡表示</label><label><input id="preview-toggle" type="checkbox" checked />映像を表示</label></div></section>
+      <section class="panel"><h2><span>02</span>キャリブレーション</h2><p class="hint">3秒後に測定を始めます（通常1.5秒、処理が遅い場合は延長）。カメラの位置を変えたら測り直してください。</p><button data-calibrate="neutral" disabled>① 正面・自然な姿勢を記録</button><div class="button-row"><button data-calibrate="eyesOpen" disabled>② 目を開けて記録</button><button data-calibrate="eyesClosed" disabled>③ 目を閉じて記録</button></div><p id="calibration-state" class="hint">未調整 · まずは初期値で動かせます</p><progress id="calibration-progress" value="0" max="1" hidden></progress><button id="cancel-calibration" class="text-button" hidden>測定をキャンセル</button>
+      <details open><summary>まぶたの感度を調整</summary><p class="hint">「開く値」以上で全開、「閉じる値」以下で閉眼になります。左右は自分の体の左右です。</p><div class="eye-readings"><label>左目 <output id="eye-left">—</output><meter id="meter-left" min="0" max="0.6" value="0"></meter></label><label>右目 <output id="eye-right">—</output><meter id="meter-right" min="0" max="0.6" value="0"></meter></label></div>
+      <label>左目：開く値 <output data-value="eyeOpenLeft"></output><input data-setting="eyeOpenLeft" type="range" min="0.06" max="0.6" step="0.005" /></label><label>左目：閉じる値 <output data-value="eyeClosedLeft"></output><input data-setting="eyeClosedLeft" type="range" min="0.01" max="0.4" step="0.005" /></label><label>右目：開く値 <output data-value="eyeOpenRight"></output><input data-setting="eyeOpenRight" type="range" min="0.06" max="0.6" step="0.005" /></label><label>右目：閉じる値 <output data-value="eyeClosedRight"></output><input data-setting="eyeClosedRight" type="range" min="0.01" max="0.4" step="0.005" /></label><label class="check"><input data-setting="blinkLink" type="checkbox" />両目の瞬きをそろえる</label></details></section>
+      <section class="panel"><h2><span>03</span>動きと表情</h2><div class="check-row"><label><input data-setting="trackHands" type="checkbox" />手・指も追跡</label><label><input data-setting="seated" type="checkbox" />着席モード</label></div><p class="hint">着席モードは脚を休止します。手と顔・肩が映っていれば、肘が隠れても腕の位置を補います。</p><label>体のなめらかさ <output data-value="bodySmoothing"></output><input data-setting="bodySmoothing" type="range" min="0.02" max="0.5" step="0.01" /></label><label>顔のなめらかさ <output data-value="faceSmoothing"></output><input data-setting="faceSmoothing" type="range" min="0.02" max="0.3" step="0.01" /></label><label>首の動きの大きさ <output data-value="headStrength"></output><input data-setting="headStrength" type="range" min="0.25" max="1.5" step="0.05" /></label><label>視線の動きの大きさ <output data-value="gazeStrength"></output><input data-setting="gazeStrength" type="range" min="0" max="2" step="0.05" /></label>
+      <details><summary>詳細設定</summary><label>瞬き後の視線保持 <output data-value="blinkHoldMs"></output><input data-setting="blinkHoldMs" type="range" min="50" max="350" step="10" /></label><label>体の検出しきい値 <output data-value="minVisibility"></output><input data-setting="minVisibility" type="range" min="0.3" max="0.9" step="0.05" /></label><label class="check"><input data-setting="rootMotion" type="checkbox" />腰の移動を反映</label><label>移動の大きさ <output data-value="motionScale"></output><input data-setting="motionScale" type="range" min="0" max="2" step="0.05" /></label><label>検出フレームレート<select data-setting="fps"><option value="15">15 fps · 軽量</option><option value="24">24 fps · 標準</option><option value="30">30 fps · なめらか</option></select></label><p class="hint">カメラ映像には検出した手指の骨格を表示します。検出時間が長い場合は軽量モードを選んでください。遠距離では顔や指の精度が下がります。隠れた関節は短く保持してから自然な待機姿勢に戻ります。</p></details></section>
+      <section class="panel"><h2><span>04</span>表情と口</h2><p class="hint">笑顔・眉を寄せた顔・目を見開いた顔を反映します。強すぎる表情は個別に弱められます。</p><label>表情全体の強さ <output data-value="expressionStrength"></output><input data-setting="expressionStrength" type="range" min="0" max="1" step="0.05" /></label><label>笑顔 <output data-value="smileStrength"></output><input data-setting="smileStrength" type="range" min="0" max="2" step="0.05" /></label><label>驚き <output data-value="surpriseStrength"></output><input data-setting="surpriseStrength" type="range" min="0" max="2" step="0.05" /></label><label>怒り <output data-value="angryStrength"></output><input data-setting="angryStrength" type="range" min="0" max="2" step="0.05" /></label><label>口の動き <output data-value="mouthStrength"></output><input data-setting="mouthStrength" type="range" min="0" max="2" step="0.05" /></label><p class="hint">口の形（カメラから推定）</p><div class="vowel-readings"><label>あ<meter id="vowel-aa" min="0" max="1" value="0" aria-label="口の形 あ"></meter></label><label>い<meter id="vowel-ih" min="0" max="1" value="0" aria-label="口の形 い"></meter></label><label>う<meter id="vowel-ou" min="0" max="1" value="0" aria-label="口の形 う"></meter></label><label>え<meter id="vowel-ee" min="0" max="1" value="0" aria-label="口の形 え"></meter></label><label>お<meter id="vowel-oh" min="0" max="1" value="0" aria-label="口の形 お"></meter></label></div><p class="hint">「い・え」は横への広がりと開き、「う・お」はすぼめ方と開きから推定します。正面の記録は口を自然に閉じて行ってください。</p><p id="expression-support" class="hint" hidden></p></section>
+      <section class="panel"><h2><span>05</span>配信と背景</h2><label>背景<select data-setting="background"><option value="transparent">透過</option><option value="green">グリーンバック</option><option value="blue">ブルーバック</option><option value="color">好きな色</option></select></label><label id="color-control" hidden>背景色<input data-setting="backgroundColor" type="color" /></label><button id="save">PNGを保存</button><p class="hint">OBSは「ウィンドウキャプチャ」で配信用ウィンドウを選択。背景にグリーンを選び、クロマキーで透過します。透過PNGも保存できます。</p><p class="hint">配信用ウィンドウに操作パネルやカメラ映像は表示されません。メイン画面を開いたまま使ってください。</p></section>
+      <footer><button id="reset" class="text-button">調整値を初期値に戻す</button><a href="../studio/">複数アバターのStudio ↗</a><span id="build-version"></span></footer>
+    </aside>
+  </main>
+  <noscript>このアプリにはJavaScriptが必要です。</noscript>
+  <script type="module">
+    import('./app.js').catch(error => {
+      document.getElementById('loading').textContent = 'アプリを読み込めませんでした。通信環境を確認して再読み込みしてください。';
+      document.getElementById('status').textContent = error.message;
+      document.getElementById('status').dataset.error = 'true';
+      document.getElementById('camera').disabled = true;
+    });
+  </script>
+</body>
+</html>
