@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { Object3D, Vector3 } from 'three';
+import { Object3D, Quaternion, Vector3 } from 'three';
 import { VRMHumanoid } from '@pixiv/three-vrm';
 import { TrackingState } from '../docs/fullbody/tracking-state.js';
 import { BodyRetargeter, solveBody, TRACKED_BONES } from '../docs/fullbody/body.js';
+import { WRIST_LIMITS } from '../docs/fullbody/hand-rig.js';
 
 const photo = JSON.parse(readFileSync(new URL('./fixtures/pointing-up-landmarks.json', import.meta.url)));
 
@@ -145,4 +146,35 @@ test('native zero-visibility hand articulation is filtered without changing its 
   const change=after.hands.worldLandmarks[0][6].y-original;
   assert.ok(change>0&&change<.0055,'real hand points must not bypass articulation smoothing');
   assert.equal(after.hands.worldLandmarks[0][6].visibility,0);
+});
+
+test('a half-turn palm observation cannot concentrate a half-turn in the sample VRM raw wrist', () => {
+  for (const side of ['left', 'right']) {
+    const { humanoid, rig, raw } = sampleRig();
+    const wrist = raw[`${side}Hand`];
+    const lower = raw[`${side}LowerArm`];
+    const restLocal = wrist.quaternion.clone();
+    const restPosition = wrist.getWorldPosition(new Vector3());
+    const forearmAxis = rig.rest[`${side}LowerArm`].direction;
+    const desired = new Quaternion().setFromAxisAngle(forearmAxis, Math.PI - .01).multiply(rig.rest[`${side}Hand`].world);
+    const handBind = rig.handRig.hands[side];
+    const solution = solveBody(null, null);
+    solution.hips = new Quaternion();
+    solution.torso = new Quaternion();
+    for (const part of ['UpperArm', 'LowerArm']) solution.directions[`${side}${part}`] = rig.rest[`${side}${part}`].direction.clone();
+    solution.hands[side] = {
+      side, fingers: {},
+      palm: desired.clone().multiply(handBind.wristWorld.clone().invert()).multiply(handBind.palmInverse.clone().invert()),
+    };
+    rig.update(solution, 1, 1, 1, { bodySmoothing: .001 });
+    humanoid.update();
+    const neutral = wrist.parent.getWorldQuaternion(new Quaternion()).multiply(restLocal);
+    const axis = wrist.getWorldPosition(new Vector3()).sub(lower.getWorldPosition(new Vector3())).normalize().applyQuaternion(neutral.invert());
+    const delta = restLocal.clone().invert().multiply(wrist.quaternion);
+    const twist = 2 * Math.atan2(delta.x * axis.x + delta.y * axis.y + delta.z * axis.z, delta.w);
+    assert.ok(Math.abs(Math.atan2(Math.sin(twist), Math.cos(twist))) <= WRIST_LIMITS.wristTwist + 1e-5,
+      'normalized-to-raw transfer must retain the bounded wrist twist');
+    assert.ok(wrist.getWorldPosition(new Vector3()).distanceTo(restPosition) < .00001,
+      'roll distribution must not move the actual VRM wrist');
+  }
 });

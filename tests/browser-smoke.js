@@ -25,6 +25,8 @@ try {
       constructor(callbacks){this.callbacks=callbacks;}
       async start(){
         this.stop();
+        window.testTrackerStarts=(window.testTrackerStarts||0)+1;
+        window.testStartedWithoutModel=!globalThis.testViewer?.avatar;
         // Reproduce the native Tasks JS container, including unused scores.
         // Omitting visibility here hid a bug which rejected every real hand.
         const nativePoints=groups=>groups?.map(points=>points.map(point=>({...point,visibility:0})));
@@ -44,11 +46,64 @@ try {
   page.on('pageerror',error=>errors.push(error.message));
   await page.goto(`${origin}/fullbody/`);
   await page.waitForFunction(()=>document.getElementById('model-name').textContent==='サンプルVRM',{timeout:30000});
+  await page.waitForFunction(()=>document.getElementById('connection').dataset.live==='true');
+  assert.equal(await page.evaluate(()=>testTrackerStarts),1,'the direct URL must start tracking without a camera button click');
+  assert.equal(await page.evaluate(()=>testStartedWithoutModel),false,'the avatar must finish loading before camera tracking starts');
+  assert.equal(await page.locator('html').evaluate(node=>node.classList.contains('live')),true);
+  assert.equal(await page.locator('aside').isVisible(),false);
+  assert.equal(await page.locator('#camera-preview').isVisible(),false);
+  assert.equal(await page.locator('#preview-toggle').isChecked(),false,'camera footage is opt-in on each visit');
   assert.equal(await page.locator('#loading').isVisible(),false);
   assert.equal(await page.locator('#stage > canvas').count(),1);
   assert.ok(await page.locator('#stage > canvas').evaluate(canvas=>canvas.width>0&&canvas.height>0));
+  assert.ok(await page.locator('#stage').evaluate(stage=>{
+    const bounds=stage.getBoundingClientRect();
+    return Math.abs(bounds.width-innerWidth)<2 && Math.abs(bounds.height-innerHeight)<2;
+  }),'the direct URL must fill the capture viewport');
   await mkdir('test-results',{recursive:true});
+  // Stationary hover cannot expose the settings icon in an OBS capture.
+  await page.locator('#settings-toggle').hover();
+  await page.waitForFunction(()=>document.documentElement.classList.contains('controls-idle'),null,{timeout:10000});
+  assert.ok(await page.locator('#settings-toggle').evaluate(node=>{
+    let opacity=1;
+    for(let current=node;current;current=current.parentElement) opacity*=Number(getComputedStyle(current).opacity);
+    return opacity<.01 || getComputedStyle(node).visibility==='hidden';
+  }),'stream controls must disappear even while the pointer remains over the gear');
   await page.screenshot({path:'test-results/fullbody-desktop.png'});
+  async function openSettings(target=page) {
+    if (await target.locator('html').evaluate(node=>node.classList.contains('settings-open'))) return;
+    await target.mouse.move(30,30);
+    await target.locator('#settings-toggle').click();
+    await target.waitForFunction(()=>document.documentElement.classList.contains('settings-open'));
+  }
+  async function requestPreview(target=page) {
+    // The change handler deliberately reverts checked until approval, so a
+    // Playwright check() would incorrectly require the unsafe intermediate state.
+    await target.locator('#preview-toggle').click();
+    await target.waitForFunction(()=>document.getElementById('preview-confirm').open);
+    assert.equal(await target.locator('#preview-toggle').isChecked(),false);
+    assert.equal(await target.locator('#camera-preview').isVisible(),false,'opening confirmation must never expose the webcam');
+  }
+  await openSettings();
+  assert.equal(await page.locator('aside #camera-preview').count(),1,'the webcam belongs inside settings, outside the capture stage');
+  await requestPreview();
+  await page.locator('#preview-cancel').click();
+  assert.equal(await page.locator('#preview-toggle').isChecked(),false);
+  assert.equal(await page.locator('#camera-preview').isVisible(),false);
+  await requestPreview();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(()=>!document.getElementById('preview-confirm').open);
+  assert.equal(await page.locator('#preview-toggle').isChecked(),false);
+  assert.equal(await page.locator('#camera-preview').isVisible(),false);
+  await requestPreview();
+  await page.locator('#preview-accept').click();
+  assert.equal(await page.locator('#preview-toggle').isChecked(),true);
+  assert.equal(await page.locator('#camera-preview').isVisible(),true);
+  await page.locator('#close-settings').click();
+  assert.equal(await page.locator('#preview-toggle').isChecked(),false,'returning to capture mode revokes preview approval');
+  assert.equal(await page.locator('#camera-preview').isVisible(),false);
+  await openSettings();
+  assert.equal(await page.locator('#camera-preview').isVisible(),false,'reopening settings must not restore webcam footage');
 
   // The exported image has a real alpha channel; CSS checkerboard is excluded.
   const downloadEvent=page.waitForEvent('download');
@@ -64,8 +119,8 @@ try {
   },`data:image/png;base64,${png.toString('base64')}`);
   assert.equal(alpha,0,'transparent PNG must preserve alpha');
 
-  // Use the asymmetric sample model, freeze its exact pose, and compare real
-  // exported pixels. A CSS-only flip would fail this export regression.
+  // The authored asymmetric model must keep exactly the same pixels while
+  // frozen. Mirroring changes incoming motion, never the model or PNG image.
   await page.locator('#freeze').click();
   async function saveImage() {
     const pending=page.waitForEvent('download');
@@ -84,23 +139,29 @@ try {
       return context.getImageData(0,0,canvas.width,canvas.height);
     }
     const a=await pixels(original), b=await pixels(mirrored);
-    let maxError=0, different=0;
+    let maxError=0, asymmetric=0;
     for(let y=0;y<a.height;y++)for(let x=0;x<a.width;x++)for(let c=0;c<4;c++) {
       const i=(y*a.width+x)*4+c,j=(y*a.width+a.width-1-x)*4+c;
-      maxError=Math.max(maxError,Math.abs(a.data[i]-b.data[j]));
-      if(Math.abs(a.data[i]-b.data[i])>10) different++;
+      maxError=Math.max(maxError,Math.abs(a.data[i]-b.data[i]));
+      if(Math.abs(a.data[i]-a.data[j])>10) asymmetric++;
     }
-    return {maxError,different};
+    return {maxError,asymmetric};
   },[original,mirrored]);
-  assert.ok(reflection.maxError<=2,`PNG reflection mismatch: ${JSON.stringify(reflection)}`);
-  assert.ok(reflection.different>300,'an asymmetric avatar must visibly change when mirrored');
-  assert.equal(await page.locator('#stage > canvas').evaluate(canvas=>getComputedStyle(canvas).transform),'matrix(-1, 0, 0, 1, 0, 0)');
+  assert.ok(reflection.maxError<=2,`motion mirror must preserve a frozen PNG: ${JSON.stringify(reflection)}`);
+  assert.ok(reflection.asymmetric>300,'the fixture must contain visible asymmetry to catch model reflection');
+  assert.equal(await page.locator('#stage > canvas').evaluate(canvas=>getComputedStyle(canvas).transform),'none');
   await page.locator('#freeze').click();
 
   await page.locator('[data-setting="eyeOpenLeft"]').fill('0.34');
   await page.locator('[data-setting="background"]').selectOption('green');
+  await requestPreview();
+  await page.locator('#preview-accept').click();
   await page.reload();
   await page.waitForFunction(()=>document.getElementById('model-name').textContent==='サンプルVRM');
+  await page.waitForFunction(()=>document.getElementById('connection').dataset.live==='true');
+  assert.equal(await page.locator('#preview-toggle').isChecked(),false,'reload must discard the earlier preview approval');
+  assert.equal(await page.locator('#camera-preview').isVisible(),false);
+  await openSettings();
   assert.equal(await page.locator('[data-setting="eyeOpenLeft"]').inputValue(),'0.34');
   assert.equal(await page.locator('[data-setting="background"]').inputValue(),'green');
   assert.equal(await page.locator('[data-setting="mirrorAvatar"]').isChecked(),true);
@@ -123,14 +184,17 @@ try {
     };
     setEyes(.28);
   });
-  await page.locator('#camera').click();
   await page.waitForFunction(()=>document.getElementById('connection').dataset.live==='true');
   await page.waitForFunction(()=>document.getElementById('face-state').dataset.active==='true');
+  await requestPreview();
+  await page.locator('#preview-accept').click();
   await page.locator('[data-setting="mirrorPreview"]').uncheck();
   assert.equal(await page.locator('#video').evaluate(video=>getComputedStyle(video).transform),'none');
-  assert.equal(await page.locator('#stage > canvas').evaluate(canvas=>getComputedStyle(canvas).transform),'matrix(-1, 0, 0, 1, 0, 0)','camera preview mirror must not change the avatar setting');
+  assert.equal(await page.locator('#stage > canvas').evaluate(canvas=>getComputedStyle(canvas).transform),'none','camera preview mirror must not reflect the avatar image');
   await page.locator('[data-setting="mirrorPreview"]').check();
   assert.equal(await page.locator('#video').evaluate(video=>getComputedStyle(video).transform),'matrix(-1, 0, 0, 1, 0, 0)');
+  await page.locator('#preview-toggle').uncheck();
+  assert.equal(await page.locator('#camera-preview').isVisible(),false);
   await page.locator('[data-calibrate="neutral"]').click();
   await page.waitForFunction(()=>document.getElementById('calibration-state').textContent.includes('記録しました'),null,{timeout:10000});
   await page.locator('[data-calibrate="eyesOpen"]').click();
@@ -190,6 +254,7 @@ try {
   }
   assert.equal(await page.locator('#expression-support').isVisible(),false,'sample has all requested expression presets');
   await page.evaluate(()=>setFacePose());
+  await page.locator('[data-setting="mirrorAvatar"]').uncheck();
   // Face and hands are visible, but neither shoulders nor elbows are in frame.
   // Before wrist IK this rotated the palms down beside the avatar's waist.
   await page.evaluate(()=>{
@@ -334,17 +399,26 @@ try {
       testPose={worldLandmarks:[world],landmarks:[landmarks]};
     };
   });
+  function oneRaisedHand(side) {
+    const avatar=testViewer.avatar,rig=avatar.vrm.humanoid;
+    const other=side==='left'?'right':'left';
+    const height=name=>{const node=rig.getRawBoneNode(name);return node.getWorldPosition(node.position.clone()).y;};
+    return Object.keys(avatar.solution.armTargets).length===1 && avatar.solution.armTargets[side] &&
+      height(side+'Hand')>height('chest')+.10 && height(other+'Hand')<height('chest')-.08 &&
+      !avatar.rig.lastArmTargets.has(other);
+  }
   for(const [side,duplicate] of [['right',false],['left',false],['right',true],['left',true]]) {
     await page.evaluate(([side,duplicate])=>raiseOneHand(side,duplicate),[side,duplicate]);
-    await page.waitForFunction(side=>{
-      const avatar=testViewer.avatar,rig=avatar.vrm.humanoid;
-      const other=side==='left'?'right':'left';
-      const height=name=>{const node=rig.getRawBoneNode(name);return node.getWorldPosition(node.position.clone()).y;};
-      return Object.keys(avatar.solution.armTargets).length===1 && avatar.solution.armTargets[side] &&
-        height(side+'Hand')>height('chest')+.10 && height(other+'Hand')<height('chest')-.08 &&
-        !avatar.rig.lastArmTargets.has(other);
-    },side,{timeout:10000});
+    await page.waitForFunction(oneRaisedHand,side,{timeout:10000});
   }
+  // With a fixed detector observation, mirror only the motion onto the other
+  // authored arm. No negative model scale or canvas reflection is permitted.
+  await page.locator('[data-setting="mirrorAvatar"]').check();
+  await page.waitForFunction(oneRaisedHand,'right',{timeout:10000});
+  assert.equal(await page.locator('#stage > canvas').evaluate(canvas=>getComputedStyle(canvas).transform),'none');
+  assert.ok(await page.evaluate(()=>testViewer.avatar.vrm.scene.matrixWorld.determinant()>0));
+  await page.locator('[data-setting="mirrorAvatar"]').uncheck();
+  await page.waitForFunction(oneRaisedHand,'left',{timeout:10000});
   await page.evaluate(()=>{testPose=null;testHands=structuredClone(bothHands);});
   await page.waitForFunction(handsBesideFace,null,{timeout:10000});
 
@@ -355,21 +429,38 @@ try {
   const popup=await popupEvent;
   popup.on('pageerror',error=>errors.push(error.message));
   await popup.waitForFunction(()=>document.querySelector('#stage > canvas')?.width>0);
-  await popup.waitForTimeout(1500);
+  const frozenBones=await page.evaluate(()=>testViewer.getPose().bones);
+  await popup.waitForFunction(bones=>globalThis.testViewer?.avatar &&
+    JSON.stringify(testViewer.getPose().bones)===JSON.stringify(bones),frozenBones,{timeout:30000});
   assert.equal(await popup.locator('aside').isVisible(),false);
   assert.equal(await popup.locator('.camera-preview').isVisible(),false);
   assert.equal(await popup.title(),'VRMC Full Body — 配信出力');
-  assert.equal(await popup.locator('#stage > canvas').evaluate(canvas=>getComputedStyle(canvas).transform),'matrix(-1, 0, 0, 1, 0, 0)');
-  await page.locator('[data-setting="mirrorAvatar"]').uncheck();
-  await popup.waitForFunction(()=>getComputedStyle(document.querySelector('#stage > canvas')).transform==='none');
+  assert.equal(await popup.evaluate(()=>window.testTrackerStarts||0),0,'a connected output popup must reuse the main tracker');
+  assert.equal(await popup.locator('#stage > canvas').evaluate(canvas=>getComputedStyle(canvas).transform),'none');
   await page.locator('[data-setting="mirrorAvatar"]').check();
-  await popup.waitForFunction(()=>getComputedStyle(document.querySelector('#stage > canvas')).transform==='matrix(-1, 0, 0, 1, 0, 0)');
+  await popup.waitForFunction(bones=>JSON.stringify(testViewer.getPose().bones)===JSON.stringify(bones),frozenBones);
+  assert.equal(await popup.locator('#stage > canvas').evaluate(canvas=>getComputedStyle(canvas).transform),'none');
   await popup.screenshot({path:'test-results/fullbody-output.png'});
   await page.locator('#freeze').click();
-  await popup.waitForFunction(handsBesideFace,null,{timeout:10000});
+  try { await popup.waitForFunction(handsBesideFace,null,{timeout:10000}); }
+  catch (error) {
+    const details=await popup.evaluate(()=>{
+      const avatar=testViewer.avatar;
+      const point=name=>{const bone=avatar.vrm.humanoid.getRawBoneNode(name);return bone.getWorldPosition(bone.position.clone());};
+      return {head:point('head').toArray(),chest:point('chest').toArray(),mirrored:avatar.mirrored,
+        hands:['left','right'].map(side=>({side,wrist:point(side+'Hand').toArray(),
+          anchor:avatar.solution.armTargets[side],target:avatar.solution.armTargets[side]?
+            avatar.rig.imageWristTarget(avatar.solution.armTargets[side]).toArray():null}))};
+    });
+    throw new Error('Popup did not restore the tracked hand pose: '+JSON.stringify(details),{cause:error});
+  }
   await page.locator('#freeze').click();
+  await requestPreview();
+  await page.locator('#preview-accept').click();
+  assert.equal(await page.locator('#camera-preview').isVisible(),true);
   await page.locator('#camera').click();
   assert.equal(await page.locator('#camera-preview').isVisible(),false);
+  assert.equal(await page.locator('#preview-toggle').isChecked(),false,'stopping the camera must revoke preview approval');
   assert.equal(await page.locator('[data-setting="quality"]').isEnabled(),true);
   await page.locator('#freeze').click();
   await page.locator('#reset').click();
@@ -378,8 +469,40 @@ try {
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'mobile layout must not overflow horizontally');
   await page.screenshot({path:'test-results/fullbody-mobile.png',fullPage:true});
   await popup.close();
+  await page.locator('#close-settings').click();
+  assert.equal(await page.locator('aside').isVisible(),false);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'mobile capture mode must not overflow horizontally');
+
+  // A saved user model is restored before automatic tracking starts, including
+  // when using the settings URL directly. The fixture is the public sample VRM.
+  await page.setViewportSize({width:1440,height:1000});
+  await openSettings();
+  await page.locator('#files').setInputFiles({name:'saved-avatar.vrm',mimeType:'application/octet-stream',
+    buffer:await readFile(new URL('../docs/models/VRM1_Constraint_Twist_Sample.vrm',import.meta.url))});
+  await page.waitForFunction(()=>document.getElementById('model-name').textContent==='saved-avatar.vrm');
+  await page.waitForFunction(()=>!document.getElementById('files').disabled);
+  await page.goto(`${origin}/fullbody/?settings=1`);
+  await page.waitForFunction(()=>document.getElementById('connection').dataset.live==='true');
+  assert.equal(await page.locator('#model-name').textContent(),'saved-avatar.vrm');
+  assert.equal(await page.evaluate(()=>testStartedWithoutModel),false);
+  assert.equal(await page.locator('aside').isVisible(),true);
+  assert.equal(await page.locator('#preview-toggle').isChecked(),false);
+  assert.equal(await page.locator('#camera-preview').isVisible(),false);
+  await page.locator('#camera').click();
+
+  // Bookmarking the old output URL must also work when no opener exists.
+  const standalone=await context.newPage();
+  standalone.on('pageerror',error=>errors.push(error.message));
+  await standalone.goto(`${origin}/fullbody/?output=1`);
+  await standalone.waitForFunction(()=>document.getElementById('connection').dataset.live==='true');
+  assert.equal(await standalone.evaluate(()=>window.opener),null);
+  assert.equal(await standalone.evaluate(()=>testTrackerStarts),1);
+  assert.equal(await standalone.locator('#model-name').textContent(),'saved-avatar.vrm');
+  assert.equal(await standalone.locator('aside').isVisible(),false);
+  assert.equal(await standalone.locator('#camera-preview').isVisible(),false);
+  await standalone.close();
   assert.deepEqual(errors,[]);
-  console.log('Browser UI: sample VRM, alpha PNG, saved settings, invalid VRM recovery, camera/calibration, 4fps + 220ms delay, stationary wrists, cropped torso, fist/V fingers, single-hand identity/duplicates, expression mesh and five vowels, frozen output, stop/reset and mobile layout passed.');
+  console.log('Browser UI: direct-URL autostart, clean capture/idle controls, preview approval/cancel/Escape/reset, authored model/PNG orientation, saved model/settings, invalid VRM recovery, calibration, 4fps + 220ms delay, stationary wrists, cropped torso, fist/V fingers, hand identity/motion mirror, expression mesh and five vowels, frozen popup/standalone output, stop/reset and mobile layout passed.');
 } finally {
   await browser?.close();
   await new Promise(resolve=>server.close(resolve));

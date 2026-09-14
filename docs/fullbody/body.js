@@ -1,6 +1,6 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import { solveTwoBoneIK } from './arm-ik.js';
-import { measureHand, HandRetargeter } from './hand-rig.js';
+import { measureHand, HandRetargeter, constrainWristRotation, WRIST_LIMITS } from './hand-rig.js';
 
 const IDENTITY = new Quaternion();
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -292,6 +292,7 @@ export class BodyRetargeter {
     this.last = new Map();
     this.lastArmTargets = new Map();
     this.releasedArmTimes = new Map();
+    this.wristRotations = new Map();
     this.imageReference = {};
     this.handRig = new HandRetargeter(bones);
     for (const [name, bone] of Object.entries(bones)) {
@@ -373,6 +374,16 @@ export class BodyRetargeter {
   }
 
   update(solution, sampleTime, now, dt, settings = {}, face = undefined) {
+    // Remove last render's distributed roll before solving the arm again.
+    // Its bind-based direction solution and smoothing must never feed that
+    // additional roll back into themselves and accumulate complete turns.
+    for (const [side, state] of this.wristRotations) {
+      const lower = this.bones[`${side}LowerArm`];
+      if (lower && state.baseLocal) {
+        lower.quaternion.copy(state.baseLocal);
+        lower.updateWorldMatrix(false, true);
+      }
+    }
     if (this.releaseSolution !== solution) {
       this.releaseSolution = solution;
       for (const side of solution.releasedSides ?? []) this.releaseArm(side, now);
@@ -416,9 +427,8 @@ export class BodyRetargeter {
     }
     // Palms precede fingers so finger targets use the current wrist orientation.
     for (const side of ['left', 'right']) {
-      const name = `${side}Hand`;
       const hand = this.handRig.solve(solution.hands?.[side]);
-      this.apply(name, hand.wristWorld, sampleTime, now, dt, settings, settings.trackHands === false);
+      this.updateWrist(side, hand.wristWorld, sampleTime, now, dt, settings);
       for (const [finger, { joints }] of Object.entries(FINGERS)) {
         for (const joint of joints) {
           const name = `${side}${finger}${joint}`;
@@ -430,11 +440,71 @@ export class BodyRetargeter {
 
   releaseArm(side, now) {
     if (side !== 'left' && side !== 'right') return;
+    const wristState = this.wristRotations.get(side);
+    const lower = this.bones[`${side}LowerArm`];
+    if (lower && wristState?.baseLocal) {
+      lower.quaternion.copy(wristState.baseLocal);
+      lower.updateWorldMatrix(false, true);
+    }
+    this.wristRotations.delete(side);
     this.lastArmTargets.delete(side);
     for (const name of this.last.keys()) {
       if (name.startsWith(side) && /UpperArm|LowerArm|Hand|Thumb|Index|Middle|Ring|Little/.test(name)) this.last.delete(name);
     }
     this.releasedArmTimes.set(side, now);
+  }
+
+  updateWrist(side, desiredWorld, sampleTime, now, dt, settings) {
+    const name = `${side}Hand`;
+    const wrist = this.bones[name];
+    const lower = this.bones[`${side}LowerArm`];
+    const rest = this.rest[name];
+    if (!wrist || !rest) return;
+    if (!lower) {
+      this.apply(name, desiredWorld, sampleTime, now, dt, settings, settings.trackHands === false);
+      return;
+    }
+    let state = this.wristRotations.get(side);
+    const fresh = settings.trackHands !== false && desiredWorld && now - sampleTime >= -0.1 && now - sampleTime < 0.4;
+    if (!state) state = { appliedTwist: 0, measuredTwist: 0, time: -Infinity };
+    if (fresh) {
+      if (sampleTime - state.time > 0.4) state.measuredTwist = 0;
+      state.desiredWorld = desiredWorld;
+      state.time = sampleTime;
+    }
+    const holding = settings.trackHands !== false && now - state.time <= 0.4;
+    const axisWorld = wrist.getWorldPosition(new Vector3()).sub(lower.getWorldPosition(new Vector3())).normalize();
+    const parent = wrist.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY;
+    const neutral = parent.clone().multiply(rest.local);
+    const axis = axisWorld.clone().applyQuaternion(neutral.clone().invert());
+    const delta = holding ? neutral.clone().invert().multiply(state.desiredWorld) : null;
+    const limited = delta && constrainWristRotation(delta, axis, state.measuredTwist);
+    if (limited) state.measuredTwist = limited.measuredTwist;
+    const forearmTarget = limited ? clamp(limited.twist * 0.85, -WRIST_LIMITS.forearmTwist, WRIST_LIMITS.forearmTwist) : 0;
+    state.appliedTwist += (forearmTarget - state.appliedTwist) * smoothingAlpha(dt, holding ? settings.bodySmoothing ?? 0.12 : 0.45);
+    state.baseLocal = lower.quaternion.clone();
+    // Rotating around elbow -> wrist leaves both IK joint positions unchanged.
+    const world = new Quaternion().setFromAxisAngle(axisWorld, state.appliedTwist)
+      .multiply(lower.getWorldQuaternion(new Quaternion()));
+    lower.quaternion.copy(worldToLocalQuaternion(lower.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY, world));
+    lower.updateWorldMatrix(false, true);
+    let local = null;
+    if (limited) {
+      const desired = neutral.clone().multiply(limited.rotation);
+      local = worldToLocalQuaternion(wrist.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY, desired);
+      // The forearm is smoothed independently. Until it catches up, cap the
+      // residual at the wrist instead of briefly putting all of the roll here.
+      const relative = rest.local.clone().invert().multiply(local);
+      const constrained = constrainWristRotation(relative, axis, 0, WRIST_LIMITS.wristTwist);
+      local = constrained && rest.local.clone().multiply(constrained.rotation);
+    }
+    this.applyLocal(name, local, state.time, now, dt, settings, settings.trackHands === false);
+    // Bound the rendered joint too: a changing forearm axis or a previous
+    // tracking pose cannot escape the limits during quaternion interpolation.
+    const rendered = constrainWristRotation(rest.local.clone().invert().multiply(wrist.quaternion), axis, 0, WRIST_LIMITS.wristTwist);
+    if (rendered) wrist.quaternion.copy(rest.local.clone().multiply(rendered.rotation));
+    wrist.updateWorldMatrix(false, true);
+    this.wristRotations.set(side, state);
   }
 
   imageWristTarget(anchor, sampleTime = null) {

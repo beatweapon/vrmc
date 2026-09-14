@@ -6,6 +6,44 @@ const Z = new Vector3(0, 0, 1);
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const radians = degrees => degrees * Math.PI / 180;
 
+// Retargeting safeguards, not a medical range-of-motion model. A VRM's single
+// lower-arm joint carries pronation/supination; the wrist should carry very
+// little axial rotation. These limits also reject impossible monocular poses.
+export const WRIST_LIMITS = Object.freeze({ forearmTwist: radians(100), wristTwist: radians(30), swing: radians(85) });
+
+function signedTwist(rotation, axis, previous = 0) {
+  const projection = rotation.x * axis.x + rotation.y * axis.y + rotation.z * axis.z;
+  // Swing/twist is ill-conditioned at a 180-degree swing. In that region the
+  // camera cannot choose a reliable roll: retain its previous value.
+  if (Math.hypot(projection, rotation.w) < 0.08) return previous;
+  const angle = 2 * Math.atan2(projection, rotation.w);
+  const principal = Math.atan2(Math.sin(angle), Math.cos(angle));
+  return previous + Math.atan2(Math.sin(principal - previous), Math.cos(principal - previous));
+}
+
+/**
+ * Factor an observed wrist delta as swing * twist about the forearm axis.
+ * Unwrap roll before clamping: +179 -> -179 must not send the forearm through
+ * zero and reverse the wrist. Both q and -q describe the same target.
+ * https://marc-b-reynolds.github.io/quaternions/2022/01/31/QuatAxisFactor.html
+ */
+export function constrainWristRotation(rotation, axis, previousTwist = 0, twistLimit = WRIST_LIMITS.forearmTwist + WRIST_LIMITS.wristTwist) {
+  if (!rotation?.toArray().every(Number.isFinite) || !axis?.toArray().every(Number.isFinite)
+    || rotation.lengthSq() < 1e-8 || axis.lengthSq() < 1e-8) return null;
+  const direction = axis.clone().normalize();
+  const value = rotation.clone().normalize();
+  const measuredTwist = signedTwist(value, direction, previousTwist);
+  const twist = new Quaternion().setFromAxisAngle(direction, measuredTwist);
+  const swing = value.multiply(twist.clone().invert()).normalize();
+  const angle = new Quaternion().angleTo(swing);
+  if (angle > WRIST_LIMITS.swing) swing.slerpQuaternions(new Quaternion(), swing, WRIST_LIMITS.swing / angle);
+  const limitedTwist = clamp(measuredTwist, -twistLimit, twistLimit);
+  return {
+    rotation: swing.clone().multiply(new Quaternion().setFromAxisAngle(direction, limitedTwist)).normalize(),
+    swing, twist: limitedTwist, measuredTwist,
+  };
+}
+
 export const HAND_FINGERS = {
   Thumb: { indices: [1, 2, 3, 4], joints: ['Metacarpal', 'Proximal', 'Distal'] },
   Index: { indices: [5, 6, 7, 8], joints: ['Proximal', 'Intermediate', 'Distal'] },

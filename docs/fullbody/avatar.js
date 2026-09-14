@@ -4,6 +4,7 @@ import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import {
   BodyRetargeter, TRACKED_BONES, calibrateBody, rootOffset, smoothingAlpha, solveBody, validateBodyCalibration,
 } from './body.js';
+import { mirrorBodyInput, mirrorFaceMotion } from './mirror-motion.js';
 
 const EXPRESSION_NAMES = ['blink', 'blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh', 'happy', 'angry', 'sad', 'relaxed', 'surprised'];
 const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
@@ -89,15 +90,24 @@ export class FullBodyAvatar {
     const pose = {...frame.pose, imageWidth:frame.pose?.imageWidth ?? frame.imageWidth,
       imageHeight:frame.pose?.imageHeight ?? frame.imageHeight};
     const sequence = frame.sequence ?? sampleTime;
-    const solveSettings = `${settings.minVisibility}/${settings.seated}/${settings.trackHands}`;
+    const mirrored = settings.mirrorAvatar === true;
+    if (this.mirrored !== undefined && this.mirrored !== mirrored) {
+      for (const side of ['left', 'right']) this.rig.releaseArm(side, now);
+      this.rig.imageReference = {};
+    }
+    this.mirrored = mirrored;
+    const solveSettings = `${settings.minVisibility}/${settings.seated}/${settings.trackHands}/${mirrored}`;
     if (!this.solution || this.solutionSequence !== sequence || this.solveSettings !== solveSettings) {
-      this.solution = solveBody(pose, frame.hands, settings, frame.faceLandmarks);
+      const input = mirrored ? mirrorBodyInput(pose, frame.hands, frame.faceLandmarks)
+        : { pose, hands: frame.hands, faceLandmarks: frame.faceLandmarks };
+      this.solution = solveBody(input.pose, input.hands, settings, input.faceLandmarks);
       this.solutionSequence = sequence;
       this.solveSettings = solveSettings;
     }
-    this.rig.update(this.solution, sampleTime, now, dt, settings, frame.face ?? null);
+    const faceMotion = mirrored ? mirrorFaceMotion(frame.face) : frame.face;
+    this.rig.update(this.solution, sampleTime, now, dt, settings, faceMotion ?? null);
     this.updateRoot(pose, sampleTime, now, dt, settings);
-    this.updateFace(frame.face, sampleTime, now, dt);
+    this.updateFace(frame.face, sampleTime, now, dt, mirrored);
     this.vrm.update(dt);
   }
 
@@ -106,6 +116,9 @@ export class FullBodyAvatar {
     if (!hips || !this.hipsPosition) return;
     const offset = rootOffset(pose, this.calibration, this.rig.torsoLength, settings);
     if (offset && now - sampleTime < 0.4) {
+      // The calibration remains in the user's coordinates. Reflect only the
+      // resulting lateral motion, not the model's authored rest translation.
+      if (settings.mirrorAvatar === true) offset.x *= -1;
       this.rootTarget.copy(offset);
       this.rootTime = sampleTime;
     }
@@ -131,7 +144,7 @@ export class FullBodyAvatar {
     }
   }
 
-  updateFace(face, sampleTime, now, dt) {
+  updateFace(face, sampleTime, now, dt, mirrored = false) {
     const fresh = face?.tracked && now - sampleTime < 0.4;
     if (fresh) {
       this.lastExpressions = { ...face.expressions };
@@ -139,10 +152,12 @@ export class FullBodyAvatar {
       this.lastFaceTime = sampleTime;
     }
     const holding = now - this.lastFaceTime <= 0.4;
+    const motion = { expressions: this.lastExpressions, gaze: this.lastGaze };
+    const displayed = mirrored ? mirrorFaceMotion(motion) : motion;
     const manager = this.vrm.expressionManager;
     if (manager) {
       const independentBlink = !!manager.getExpression('blinkLeft') && !!manager.getExpression('blinkRight');
-      const expressions = { ...this.lastExpressions };
+      const expressions = { ...displayed.expressions };
       if (independentBlink) {
         expressions.blink = 0;
       } else {
@@ -161,8 +176,8 @@ export class FullBodyAvatar {
     if (this.vrm.lookAt) {
       const lookAt = this.vrm.lookAt;
       const alpha = holding ? 1 : smoothingAlpha(dt, 0.4);
-      const yaw = holding && Number.isFinite(this.lastGaze.yaw) ? this.lastGaze.yaw : 0;
-      const pitch = holding && Number.isFinite(this.lastGaze.pitch) ? this.lastGaze.pitch : 0;
+      const yaw = holding && Number.isFinite(displayed.gaze.yaw) ? displayed.gaze.yaw : 0;
+      const pitch = holding && Number.isFinite(displayed.gaze.pitch) ? displayed.gaze.pitch : 0;
       lookAt.yaw += (yaw - lookAt.yaw) * alpha;
       lookAt.pitch += (pitch - lookAt.pitch) * alpha;
     }

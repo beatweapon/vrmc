@@ -5,7 +5,7 @@ import {TrackingState} from './tracking-state.js';
 import {DEFAULTS, sanitizeSettings, loadProfile, saveProfile, modelStore} from './settings.js';
 
 const $ = id => document.getElementById(id);
-const isOutput = new URLSearchParams(location.search).get('output') === '1';
+const isOutput = new URLSearchParams(location.search).get('output') === '1' && !!window.opener;
 const origin = location.origin;
 const profile = loadProfile();
 let settings = profile.settings;
@@ -26,6 +26,9 @@ let lastInferenceTime = 0;
 let trackingFps = 0;
 let lastRenderTime = performance.now();
 let renderHandle;
+let controlsTimer;
+let settingsOpen = document.documentElement.classList.contains('settings-open');
+let previewAllowed = false;
 const faceSolver = new FaceSolver();
 const trackingState = new TrackingState();
 const video = $('video');
@@ -34,6 +37,34 @@ const tracker = new Tracker({onResults: receiveResults, onStatus: message => sta
 function status(message, error = false) {
   $('status').textContent = message;
   $('status').dataset.error = String(error);
+  $('stage-status').textContent = message;
+  $('stage-notice').hidden = running && !error;
+}
+function resetPreview() {
+  previewAllowed = false;
+  $('preview-toggle').checked = false;
+  $('camera-preview').hidden = true;
+  if ($('preview-confirm').open) $('preview-confirm').close();
+}
+function showControls() {
+  clearTimeout(controlsTimer);
+  document.documentElement.classList.remove('controls-idle');
+  if (running && !settingsOpen) controlsTimer = setTimeout(() => {
+    document.documentElement.classList.add('controls-idle');
+  }, 2500);
+}
+function setSettingsOpen(open) {
+  settingsOpen = open;
+  document.documentElement.classList.toggle('settings-open', open);
+  $('settings-toggle').setAttribute('aria-expanded', String(open));
+  if (!open) resetPreview();
+  const url = new URL(location.href);
+  if (open) url.searchParams.set('settings', '1');
+  else url.searchParams.delete('settings');
+  history.replaceState(null, '', url);
+  showControls();
+  viewer?.resize();
+  (open ? $('close-settings') : $('settings-toggle')).focus({preventScroll:true});
 }
 function post(message) { if (popup && !popup.closed) popup.postMessage({vrmc:'fullbody', ...message}, origin); }
 function sendState() {
@@ -67,7 +98,11 @@ function cameraButtons() {
   $('freeze').textContent = frozen ? '固定を解除' : 'ポーズを固定';
   $('freeze').setAttribute('aria-pressed', String(frozen));
   document.querySelectorAll('[data-calibrate]').forEach(button => { button.disabled = !running || frozen || !!calibrationJob; });
-  $('camera-preview').hidden = !running || !$('preview-toggle').checked;
+  $('camera-preview').hidden = !running || !settingsOpen || !previewAllowed;
+  $('stage-camera').hidden = running;
+  $('stage-camera').textContent = starting ? '開始をキャンセル' : 'カメラを開始';
+  $('stage-notice').hidden = running && $('status').dataset.error !== 'true';
+  if (!running) showControls();
 }
 
 function receiveResults(results) {
@@ -165,7 +200,9 @@ async function startCamera() {
     running = true;
     stream.getVideoTracks().forEach(track => track.addEventListener('ended', () => { if (cameraStream === stream) { stopCamera(); status('カメラとの接続が切れました。再度開始してください。', true); } }));
     await enumerateCameras();
+    if (generation !== cameraGeneration) return;
     status('追跡中です。頭からつま先まで映し、正面の姿勢と目の開閉を記録してください。');
+    showControls();
   } catch (error) {
     if (generation !== cameraGeneration) return;
     stopCamera();
@@ -180,6 +217,7 @@ function stopCamera() {
   ++cameraGeneration;
   starting = false;
   running = false;
+  resetPreview();
   tracker.stop();
   cameraStream?.getTracks().forEach(track => track.stop());
   cameraStream = null;
@@ -296,7 +334,7 @@ function calibrationTick(now) {
 
 const connections = [[11,12],[11,23],[12,24],[23,24],[11,13],[13,15],[12,14],[14,16],[23,25],[25,27],[27,31],[24,26],[26,28],[28,32]];
 function drawLandmarks(results) {
-  if (!$('preview-toggle').checked) return;
+  if (!settingsOpen || !previewAllowed || !running) return;
   const canvas = $('landmarks');
   canvas.width = video.videoWidth || 1280;
   canvas.height = video.videoHeight || 720;
@@ -359,15 +397,7 @@ function outputMode() {
       frame = {...message.frame, time:performance.now()/1000 - Math.max(0,message.age || 0)};
     } else if (message.type==='view') { pendingView=message.view; viewer.setView(message.view); }
   });
-  if (window.opener) window.opener.postMessage({vrmc:'fullbody',type:'ready'}, origin);
-  else {
-    document.documentElement.classList.remove('output');
-    $('loading').hidden = false;
-    $('loading').textContent = '配信出力はメイン画面の「配信用ウィンドウを開く」から開始してください。';
-    $('loading').append(Object.assign(document.createElement('a'), {href:'./',textContent:' メイン画面へ'}));
-    document.querySelector('aside').hidden = true;
-    $('camera').disabled = $('freeze').disabled = $('output').disabled = true;
-  }
+  window.opener.postMessage({vrmc:'fullbody',type:'ready'}, origin);
 }
 
 function animate(now) {
@@ -392,13 +422,20 @@ function animate(now) {
 }
 
 async function init() {
-  $('build-version').textContent = 'Full Body · 2026.09.09.5';
+  $('build-version').textContent = 'Full Body · 2026.09.14.1';
   try {
     viewer = new Viewer($('stage'), {interactive:!isOutput, onViewChange:view=>post({type:'view',view})});
     viewer.setDisplay(settings);
     viewer.renderer.domElement.addEventListener('webglcontextlost', event => { event.preventDefault(); stopCamera(); status('描画用GPUとの接続が失われました。ページを再読み込みしてください。', true); });
     renderHandle = requestAnimationFrame(animate);
     if (isOutput) { outputMode(); return; }
+    resetPreview();
+    $('settings-toggle').setAttribute('aria-expanded', String(settingsOpen));
+    $('settings-toggle').onclick = () => setSettingsOpen(true);
+    $('close-settings').onclick = () => setSettingsOpen(false);
+    window.addEventListener('pointermove', showControls, {passive:true});
+    window.addEventListener('pointerdown', showControls, {passive:true});
+    window.addEventListener('keydown', showControls);
     syncSettings();
     if (calibration.updatedAt) $('calibration-state').textContent = `保存済みの基準を使用中 · ${new Date(calibration.updatedAt).toLocaleDateString('ja-JP')}`;
     document.querySelectorAll('[data-setting]').forEach(input => input.addEventListener('input', () => {
@@ -408,7 +445,21 @@ async function init() {
     }));
     $('cameraId').onchange = () => { settings.cameraId=$('cameraId').value; persist(); };
     $('camera').onclick = () => { if (running || starting) { stopCamera(); status('カメラを停止しました。'); } else startCamera(); };
-    $('preview-toggle').onchange = cameraButtons;
+    $('stage-camera').onclick = () => $('camera').click();
+    $('preview-toggle').onchange = () => {
+      const requested = $('preview-toggle').checked;
+      resetPreview();
+      if (requested && settingsOpen) $('preview-confirm').showModal();
+    };
+    $('preview-cancel').onclick = resetPreview;
+    $('preview-confirm').addEventListener('cancel', resetPreview);
+    $('preview-accept').onclick = () => {
+      if (!settingsOpen) { resetPreview(); return; }
+      previewAllowed = true;
+      $('preview-toggle').checked = true;
+      $('preview-confirm').close();
+      cameraButtons();
+    };
     $('freeze').onclick = () => {
       frozen=!frozen;
       if (frozen) cancelCalibration();
@@ -429,6 +480,7 @@ async function init() {
     document.querySelectorAll('[data-calibrate]').forEach(button => { button.onclick=()=>beginCalibration(button.dataset.calibrate); });
     $('cancel-calibration').onclick = () => { cancelCalibration(); cameraButtons(); $('calibration-state').textContent='測定をキャンセルしました。'; };
     $('reset').onclick = () => {
+      resetPreview();
       cancelCalibration(); calibration={};
       settings={...DEFAULTS,cameraId:settings.cameraId,background:settings.background,backgroundColor:settings.backgroundColor};
       faceSolver.reset(); viewer.avatar?.setCalibration(null); syncSettings(); persist(); sendState(); cameraButtons();
@@ -445,6 +497,10 @@ async function init() {
       sendState(); post({type:'model',file:modelFile,view:viewer.getView()});
     });
     window.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && settingsOpen && !$('preview-confirm').open) {
+        setSettingsOpen(false);
+        return;
+      }
       if (/INPUT|SELECT|TEXTAREA/.test(event.target.tagName)) return;
       if ((event.ctrlKey||event.metaKey) && ['ArrowLeft','ArrowRight'].includes(event.key)) {
         event.preventDefault(); const backgrounds=['transparent','green','blue','color'];
@@ -458,12 +514,18 @@ async function init() {
     try { savedFile=await modelStore(); } catch { /* A sample is always available without storage. */ }
     await loadModel(savedFile || null,false);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('../service-worker.js').catch(()=>{});
+    // A manual start/cancel during model loading overrides automatic startup.
+    if (viewer.avatar && cameraGeneration === 0 && !running && !starting) await startCamera();
   } catch(error) {
-    status(`画面を初期化できませんでした: ${error.message}`,true);
+    status(`画面を初期化できませんでした。WebGLが使えるChrome / Edgeで再読み込みしてください: ${error.message}`,true);
     $('loading').textContent='WebGLが使えるChrome / Edgeで開いてください。';
     $('camera').disabled=true;
+    $('settings-toggle').disabled=true;
+    $('stage-camera').hidden=false;
+    $('stage-camera').textContent='ページを再読み込み';
+    $('stage-camera').onclick=()=>location.reload();
   }
 }
-window.addEventListener('pagehide', () => { stopCamera(); cancelAnimationFrame(renderHandle); viewer?.dispose(); });
+window.addEventListener('pagehide', () => { stopCamera(); clearTimeout(controlsTimer); cancelAnimationFrame(renderHandle); viewer?.dispose(); });
 window.addEventListener('pageshow', event => { if(event.persisted) location.reload(); });
 init();

@@ -86,10 +86,6 @@ export class Viewer {
     vrm.update(0);
   }
   setDisplay(settings) {
-    // Reflect the finished image, leaving anatomical sides and all tracking
-    // coordinates intact. Output windows use this same display setting.
-    this.mirrored = settings.mirrorAvatar === true;
-    this.renderer.domElement.style.transform = this.mirrored ? 'scaleX(-1)' : '';
     this.scene.background = settings.background === 'transparent' ? null : new THREE.Color(
       settings.background === 'green' ? '#00ff00' : settings.background === 'blue' ? '#0000ff' : settings.backgroundColor);
   }
@@ -99,19 +95,7 @@ export class Viewer {
   }
   async save() {
     this.renderer.render(this.scene, this.camera);
-    let canvas = this.renderer.domElement;
-    if (this.mirrored) {
-      // CSS transforms are absent from toBlob. Bake the same reflection into
-      // the export, preserving alpha and excluding every UI overlay.
-      const reflected = document.createElement('canvas');
-      reflected.width = canvas.width;
-      reflected.height = canvas.height;
-      const context = reflected.getContext('2d');
-      context.translate(reflected.width, 0);
-      context.scale(-1, 1);
-      context.drawImage(canvas, 0, 0);
-      canvas = reflected;
-    }
+    const canvas = this.renderer.domElement;
     const blob = await new Promise((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('画像を生成できませんでした。')), 'image/png'));
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

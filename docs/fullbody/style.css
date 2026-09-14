@@ -6,3 +6,27 @@
 @media(max-width:760px){.app-header{height:65px;padding:0 16px;gap:10px}.brand{font-size:21px;gap:8px}.brand span{font-size:8px;padding-left:8px;letter-spacing:1px}.app-header button{font-size:10px;min-height:34px;padding:6px 8px}main{height:auto;display:block}.workspace{padding:20px 14px 10px}#stage{height:58dvh;flex:auto;min-height:330px}.workspace-heading{margin-bottom:14px}h1{font-size:20px}.badge{font-size:9px}.signals{width:auto;margin-left:auto}.guide{display:none}aside{overflow:visible;border-left:0;border-top:1px solid var(--line);padding:0 22px 24px}.stage-bottom>span{display:none}.stage-bottom{justify-content:flex-end}.camera-preview{width:130px}.output main,.output .workspace{height:100dvh}.output #stage{height:100%}}
 
 .vowel-readings{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;text-align:center}.vowel-readings meter{height:9px}
+
+/* The normal URL is a clean live canvas. Settings are revealed explicitly. */
+.live:not(.settings-open),.live:not(.settings-open) body{background:transparent}
+.live:not(.settings-open) .app-header,.live:not(.settings-open) .workspace-heading,
+.live:not(.settings-open) aside,.live:not(.settings-open) .transport,
+.live:not(.settings-open) #status,.live:not(.settings-open) .guide,
+.live:not(.settings-open) .stage-top,.live:not(.settings-open) .stage-bottom,
+.live:not(.settings-open) .camera-preview,.live:not(.settings-open) #loading{display:none!important}
+.live:not(.settings-open) main{display:block;height:100dvh;max-width:none}
+.live:not(.settings-open) .workspace{padding:0;height:100%}
+.live:not(.settings-open) #stage{height:100%;min-height:0;border:0;border-radius:0;background:transparent}
+.settings-toggle{position:fixed;top:18px;right:18px;z-index:5;width:44px;height:44px;padding:0;font-size:26px;background:#172028da;border:1px solid #6c827a;color:var(--mint)}
+.controls-idle:not(.settings-open) .settings-toggle{opacity:0;visibility:hidden;pointer-events:none}
+.settings-open .settings-toggle,.settings-open #stage-notice,.output .settings-toggle,.output #stage-notice{display:none!important}
+#stage-notice{position:fixed;z-index:4;bottom:24px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100vw - 32px);padding:14px 18px;background:#172028ed;border:1px solid #53676b;border-radius:8px;text-align:center;font-size:12px;line-height:1.8}
+#stage-notice button{display:block;margin:12px auto 0}
+aside .camera-preview{position:relative;left:auto;bottom:auto;width:100%;max-width:340px;margin:14px auto 0;aspect-ratio:16/9}
+aside .camera-preview>span{font-size:9px}
+dialog{color:#e7ebed;background:var(--panel);border:1px solid #63776e;border-radius:12px;width:min(460px,calc(100vw - 32px));padding:24px;line-height:1.9}
+dialog::backdrop{background:#000b}
+dialog h2{font-size:17px;margin-bottom:12px}
+dialog p{font-size:13px}
+dialog .button-row{margin-top:20px}
+dialog .button-row button{font-size:12px;min-height:42px}
