@@ -17,6 +17,10 @@ const hands = (...observations) => ({
 });
 const wristBySide = (frame, side) => frame.hands.landmarks[frame.hands.trackingIds.indexOf(side)]?.[0];
 const rms = values => Math.sqrt(values.reduce((sum, value) => sum + value * value, 0) / values.length);
+const prime = (state, observations, time = 0) => {
+  state.update({ time: time - 0.1, hands: observations });
+  return state.update({ time, hands: observations });
+};
 
 test('stationary pose and hand landmark noise is attenuated before retargeting', () => {
   const state = new TrackingState();
@@ -49,7 +53,7 @@ test('result ordering does not change hand identity or mix different finger shap
   const state = new TrackingState();
   const left = hand(0.7, 'Left'), right = hand(0.3, 'Right');
   left.world[8].z = 0.045;
-  state.update({ time: 0, hands: hands(left, right) });
+  prime(state, hands(left, right));
   const frame = state.update({ time: 1 / 30, hands: hands(right, left) });
   assert.deepEqual(frame.hands.trackingIds, ['Left', 'Right']);
   assert.equal(wristBySide(frame, 'Left').x, 0.7);
@@ -60,7 +64,7 @@ test('result ordering does not change hand identity or mix different finger shap
 
 test('a temporary handedness classifier flip does not move a raised hand to the other arm', () => {
   const state = new TrackingState();
-  state.update({ time: 0, hands: hands(hand(0.72, 'Left')) });
+  prime(state, hands(hand(0.72, 'Left')));
   const jitter = state.update({ time: 1 / 30, hands: hands(hand(0.721, 'Right')) });
   assert.deepEqual(jitter.hands.trackingIds, ['Left']);
   assert.equal(jitter.hands.handedness[0][0].categoryName, 'Left');
@@ -70,6 +74,7 @@ test('a temporary handedness classifier flip does not move a raised hand to the 
 
 test('crossing hand trajectories retain identity through array reordering and a label flip', () => {
   const state = new TrackingState();
+  prime(state, hands(hand(0.74, 'Left', 0.3), hand(0.26, 'Right', 0.35)), -1 / 30);
   let frame;
   for (let i = 0; i <= 12; i++) {
     const left = hand(0.74 - i * 0.04, i === 6 || i === 7 ? 'Right' : 'Left', 0.3);
@@ -85,6 +90,7 @@ test('crossing hand trajectories retain identity through array reordering and a 
 test('freshly received slow inference is not classified as lost tracking', () => {
   const face = { faceLandmarks: [[point(0.5)]], faceBlendshapes: [{ categories: [] }], facialTransformationMatrixes: [{ data: [1, 0, 0] }] };
   const state = new TrackingState();
+  prime(state, hands(hand(0.6)), 9.9);
   const frame = state.update({ time: 10, face, pose: pose(0.5), hands: hands(hand(0.6)) }, 10.85);
   assert.equal(frame.time, 10.85);
   assert.equal(frame.captureTime, 10);
@@ -107,7 +113,7 @@ test('capture deltas drive smoothing independently of variable inference latency
 
 test('slow sequential inference does not expire a hand that is continuously observed', () => {
   const state = new TrackingState();
-  state.update({ time: 0, hands: hands(hand(0.7, 'Left')) }, 0.9);
+  prime(state, hands(hand(0.7, 'Left')));
   const frame = state.update({ time: 1, hands: hands(hand(0.701, 'Right')) }, 1.9);
   assert.deepEqual(frame.hands.trackingIds, ['Left']);
   assert.equal(frame.time, 1.9);
@@ -137,7 +143,7 @@ test('single-frame landmark teleport is rejected and sustained relocation is rea
 
 test('a wrist position spike does not teleport the hand or assign it to a new arm', () => {
   const state = new TrackingState();
-  state.update({ time: 0, hands: hands(hand(0.2, 'Left')) });
+  prime(state, hands(hand(0.2, 'Left')));
   const spike = state.update({ time: 1 / 30, hands: hands(hand(0.95, 'Left')) });
   assert.deepEqual(spike.hands.trackingIds, ['Left']);
   assert.equal(wristBySide(spike, 'Left').x, 0.2);
@@ -145,16 +151,21 @@ test('a wrist position spike does not teleport the hand or assign it to a new ar
   assert.equal(wristBySide(recovered, 'Left').x, 0.2);
 });
 
-test('absent hands are absent immediately while short occlusion preserves identity', () => {
+test('absent hands are absent immediately while re-confirmation preserves short-occlusion history', () => {
   const state = new TrackingState();
-  state.update({ time: 0, hands: hands(hand(0.7, 'Left')) });
+  const first = prime(state, hands(hand(0.7, 'Left')));
   assert.equal(state.update({ time: 0.1, hands: hands() }).hands.landmarks.length, 0);
-  const briefReturn = state.update({ time: 0.2, hands: hands(hand(0.7, 'Right')) });
+  const pending = state.update({ time: 0.2, hands: hands(hand(0.7, 'Left')) });
+  assert.deepEqual(pending.hands.trackingIds, []);
+  const briefReturn = state.update({ time: 0.3, hands: hands(hand(0.7, 'Left')) });
   assert.deepEqual(briefReturn.hands.trackingIds, ['Left']);
+  assert.deepEqual(briefReturn.hands.physicalTrackingIds, first.hands.physicalTrackingIds);
   assert.equal(state.update({ time: 0.4 }).hands, null);
-  const longReturn = state.update({ time: 1.2, hands: hands(hand(0.3, 'Right')) });
+  assert.deepEqual(state.update({ time: 1.2, hands: hands(hand(0.3, 'Right')) }).hands.trackingIds, []);
+  const longReturn = state.update({ time: 1.3, hands: hands(hand(0.3, 'Right')) });
   assert.deepEqual(longReturn.hands.trackingIds, ['Right']);
   assert.equal(wristBySide(longReturn, 'Right').x, 0.3);
+  assert.notDeepEqual(longReturn.hands.physicalTrackingIds, first.hands.physicalTrackingIds);
 });
 
 test('invalid coordinates cannot poison filter history, and confidence fields are preserved', () => {
@@ -175,6 +186,7 @@ test('invalid coordinates cannot poison filter history, and confidence fields ar
 
 test('filtering finger articulation separately from translation preserves hand shape in motion', () => {
   const state = new TrackingState();
+  prime(state, hands(hand(0.2)), -1 / 30);
   for (let i = 0; i < 20; i++) {
     const observation = hand(0.2 + i * 0.02);
     for (const p of observation.world) p.x += i * 0.03;
@@ -196,5 +208,7 @@ test('camera restart resets identity, capture monotonicity and old positions', (
   const restarted = state.update({ time: 0, pose: pose(0.8), hands: hands(hand(0.7, 'Right')) });
   assert.equal(restarted.sequence, 1);
   assert.equal(restarted.pose.landmarks[0][0].x, 0.8);
-  assert.deepEqual(restarted.hands.trackingIds, ['Right']);
+  assert.deepEqual(restarted.hands.trackingIds, []);
+  assert.equal(restarted.hands.pendingCount, 1);
+  assert.deepEqual(state.update({ time: 0.1, hands: hands(hand(0.7, 'Right')) }).hands.trackingIds, ['Right']);
 });

@@ -8,8 +8,20 @@ const radians = degrees => degrees * Math.PI / 180;
 
 // Retargeting safeguards, not a medical range-of-motion model. A VRM's single
 // lower-arm joint carries pronation/supination; the wrist should carry very
-// little axial rotation. These limits also reject impossible monocular poses.
-export const WRIST_LIMITS = Object.freeze({ forearmTwist: radians(100), wristTwist: radians(30), swing: radians(85) });
+// little axial rotation. Forearm roll is relative to a model's bind pose, NOT
+// an anatomical neutral pose: an absolute +/-100 degree cap can cut a normal
+// palm-to-dorsum turn in half. Its principal orientation may span a half-turn.
+export const WRIST_LIMITS = Object.freeze({ upperArmTwist: radians(120), forearmTwist: Math.PI, wristTwist: radians(30), swing: radians(85) });
+
+export const principalAngle = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
+
+// Share a small amount of roll with the wrist using a periodic function.
+// Multiplying an unwrapped angle by .85 makes +180 and -180 produce different
+// poses and accumulating rotations eventually hit a hard stop. Here identical
+// physical observations always have identical targets, including at +/-180.
+export function forearmRollTarget(twist) {
+  return principalAngle(twist - WRIST_LIMITS.wristTwist * 0.5 * Math.sin(twist));
+}
 
 function signedTwist(rotation, axis, previous = 0) {
   const projection = rotation.x * axis.x + rotation.y * axis.y + rotation.z * axis.z;

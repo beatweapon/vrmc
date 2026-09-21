@@ -110,6 +110,7 @@ try {
     null, { timeout: 30000 });
   const realHandFrames = await page.evaluate(() => results.filter(result => result.time > sourceChangedAt + 0.1 && result.hands?.landmarks.length === 1));
   const observations = new TrackingState();
+  let confirmedHandFrames = 0;
   for (const result of realHandFrames) {
     const category = (result.hands.handedness ?? result.hands.handednesses)[0][0];
     assert.equal(category.categoryName, 'Right', 'unmirrored official photo is anatomically a right hand');
@@ -127,8 +128,13 @@ try {
     // every real hand, rather than testing only isolated palm mathematics.
     const observation = observations.update(result,result.time+.1);
     const solved = solveBody(observation.pose,observation.hands);
-    assert.ok(solved.armTargets.right, 'actual SDK hand must survive identity/confidence checks');
-    assert.ok(solved.hands.right?.fingers.Index, 'actual SDK hand must reach finger retargeting');
+    if (observation.hands.pendingCount) {
+      assert.equal(observation.hands.landmarks.length, 0, 'unconfirmed SDK hand must not reach an arm');
+    } else {
+      confirmedHandFrames++;
+      assert.ok(solved.armTargets.right, 'actual SDK hand must survive identity/confidence checks');
+      assert.ok(solved.hands.right?.fingers.Index, 'actual SDK hand must reach finger retargeting');
+    }
     const hand = measureHand(worldPoints, 'right');
     assert.ok(hand && hand.palm.toArray().every(Number.isFinite), 'actual detector world points yield a valid palm');
     assert.ok(hand.fingers.Index.curl[1] < 0.55, 'the pictured index finger stays extended');
@@ -137,6 +143,7 @@ try {
       assert.ok(hand.fingers[finger].curl.reduce((sum, value) => sum + value, 0) > 2.0, `${finger} is curled independently of index`);
     }
   }
+  assert.ok(confirmedHandFrames > 0, 'real detector observations must confirm the hand and reach the avatar');
   await writeFile(new URL('../test-results/mediapipe/pointing-up-detection.json', import.meta.url), JSON.stringify(realHandFrames.at(-1), null, 2));
 
   await page.evaluate(() => showImage('/__pose__.jpg'));

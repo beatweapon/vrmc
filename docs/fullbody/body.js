@@ -1,6 +1,6 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import { solveTwoBoneIK } from './arm-ik.js';
-import { measureHand, HandRetargeter, constrainWristRotation, WRIST_LIMITS } from './hand-rig.js';
+import { measureHand, HandRetargeter, constrainWristRotation, WRIST_LIMITS, principalAngle, forearmRollTarget } from './hand-rig.js';
 
 const IDENTITY = new Quaternion();
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -182,6 +182,11 @@ export function solveBody(pose, hands, settings = {}, faceLandmarks = null) {
   }
   for (const [name, indices] of Object.entries(LIMBS)) {
     if (settings.seated && /Leg|Foot/.test(name)) continue;
+    // A newly detected hand has not acquired an anatomical side yet. Do not
+    // bypass that confirmation via a one-frame Pose wrist/elbow guess. Other
+    // limbs and previously confirmed hands continue to track independently.
+    if (settings.trackHands !== false && /Arm$/.test(name) &&
+        hands?.pendingSides?.includes(name.startsWith('left') ? 'left' : 'right')) continue;
     if (poseVisible(pose, indices, threshold)) {
       const vector = direction(points, ...indices);
       if (vector) result.directions[name] = vector;
@@ -378,7 +383,12 @@ export class BodyRetargeter {
     // Its bind-based direction solution and smoothing must never feed that
     // additional roll back into themselves and accumulate complete turns.
     for (const [side, state] of this.wristRotations) {
+      const upper = this.bones[`${side}UpperArm`];
       const lower = this.bones[`${side}LowerArm`];
+      if (upper && state.upperBaseLocal) {
+        upper.quaternion.copy(state.upperBaseLocal);
+        upper.updateWorldMatrix(false, true);
+      }
       if (lower && state.baseLocal) {
         lower.quaternion.copy(state.baseLocal);
         lower.updateWorldMatrix(false, true);
@@ -441,7 +451,12 @@ export class BodyRetargeter {
   releaseArm(side, now) {
     if (side !== 'left' && side !== 'right') return;
     const wristState = this.wristRotations.get(side);
+    const upper = this.bones[`${side}UpperArm`];
     const lower = this.bones[`${side}LowerArm`];
+    if (upper && wristState?.upperBaseLocal) {
+      upper.quaternion.copy(wristState.upperBaseLocal);
+      upper.updateWorldMatrix(false, true);
+    }
     if (lower && wristState?.baseLocal) {
       lower.quaternion.copy(wristState.baseLocal);
       lower.updateWorldMatrix(false, true);
@@ -457,6 +472,7 @@ export class BodyRetargeter {
   updateWrist(side, desiredWorld, sampleTime, now, dt, settings) {
     const name = `${side}Hand`;
     const wrist = this.bones[name];
+    const upper = this.bones[`${side}UpperArm`];
     const lower = this.bones[`${side}LowerArm`];
     const rest = this.rest[name];
     if (!wrist || !rest) return;
@@ -466,9 +482,12 @@ export class BodyRetargeter {
     }
     let state = this.wristRotations.get(side);
     const fresh = settings.trackHands !== false && desiredWorld && now - sampleTime >= -0.1 && now - sampleTime < 0.4;
-    if (!state) state = { appliedTwist: 0, measuredTwist: 0, time: -Infinity };
+    if (!state) state = { appliedTwist: 0, measuredTwist: 0, upperTwist: 0, upperRollPhase: 0, time: -Infinity };
     if (fresh) {
-      if (sampleTime - state.time > 0.4) state.measuredTwist = 0;
+      if (sampleTime - state.time > 0.4) {
+        state.measuredTwist = 0;
+        state.upperRollPhase = state.appliedTwist;
+      }
       state.desiredWorld = desiredWorld;
       state.time = sampleTime;
     }
@@ -478,14 +497,33 @@ export class BodyRetargeter {
     const neutral = parent.clone().multiply(rest.local);
     const axis = axisWorld.clone().applyQuaternion(neutral.clone().invert());
     const delta = holding ? neutral.clone().invert().multiply(state.desiredWorld) : null;
-    const limited = delta && constrainWristRotation(delta, axis, state.measuredTwist);
-    if (limited) state.measuredTwist = limited.measuredTwist;
-    const forearmTarget = limited ? clamp(limited.twist * 0.85, -WRIST_LIMITS.forearmTwist, WRIST_LIMITS.forearmTwist) : 0;
-    state.appliedTwist += (forearmTarget - state.appliedTwist) * smoothingAlpha(dt, holding ? settings.bodySmoothing ?? 0.12 : 0.45);
+    // The bind-derived forearm orientation has no anatomical zero. Preserve
+    // observed axial roll while still rejecting extreme wrist swing. Only the
+    // wrist's relative axial rotation is an anatomical/deformation safeguard.
+    const limited = delta && constrainWristRotation(delta, axis, state.measuredTwist, Infinity);
+    if (limited) state.measuredTwist = principalAngle(limited.measuredTwist);
+    const forearmTarget = limited ? forearmRollTarget(limited.measuredTwist) : 0;
+    const rollStep = principalAngle(forearmTarget - state.appliedTwist);
+    state.appliedTwist = principalAngle(state.appliedTwist + rollStep * smoothingAlpha(dt, holding ? settings.bodySmoothing ?? 0.12 : 0.45));
     state.baseLocal = lower.quaternion.clone();
     // Rotating around elbow -> wrist leaves both IK joint positions unchanged.
     const world = new Quaternion().setFromAxisAngle(axisWorld, state.appliedTwist)
       .multiply(lower.getWorldQuaternion(new Quaternion()));
+    if (upper) {
+      // Keep the shoulder-to-elbow and elbow-to-wrist positions fixed while
+      // spreading the roll across both long arm bones. Compensating the lower
+      // bone's local quaternion below preserves its absolute target. This keeps
+      // a half-turn from merely moving the wrist pinch to the elbow seam.
+      if (holding) state.upperRollPhase += principalAngle(state.appliedTwist - state.upperRollPhase);
+      else state.upperRollPhase = state.appliedTwist;
+      const upperTarget = holding ? clamp(state.upperRollPhase * 0.5, -WRIST_LIMITS.upperArmTwist, WRIST_LIMITS.upperArmTwist) : 0;
+      state.upperTwist += (upperTarget - state.upperTwist) * smoothingAlpha(dt, holding ? settings.bodySmoothing ?? 0.12 : 0.45);
+      state.upperBaseLocal = upper.quaternion.clone();
+      const upperAxis = lower.getWorldPosition(new Vector3()).sub(upper.getWorldPosition(new Vector3())).normalize();
+      const upperWorld = new Quaternion().setFromAxisAngle(upperAxis, state.upperTwist).multiply(upper.getWorldQuaternion(new Quaternion()));
+      upper.quaternion.copy(worldToLocalQuaternion(upper.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY, upperWorld));
+      upper.updateWorldMatrix(false, true);
+    }
     lower.quaternion.copy(worldToLocalQuaternion(lower.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY, world));
     lower.updateWorldMatrix(false, true);
     let local = null;

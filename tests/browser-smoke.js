@@ -31,6 +31,7 @@ try {
         // Omitting visibility here hid a bug which rejected every real hand.
         const nativePoints=groups=>groups?.map(points=>points.map(point=>({...point,visibility:0})));
         const tick=()=>{
+          window.testBeforeDetectorTick?.();
           const face=window.testFace?{...testFace,faceLandmarks:nativePoints(testFace.faceLandmarks)}:null;
           const hands=window.testHands?{...testHands,landmarks:nativePoints(testHands.landmarks),worldLandmarks:nativePoints(testHands.worldLandmarks)}:null;
           this.callbacks.onResults({face,pose:window.testPose||null,hands,time:performance.now()/1000-(window.testLatency||0)});
@@ -373,6 +374,66 @@ try {
   await page.evaluate(()=>setGesture([5,9]));
   await page.waitForFunction(rawFingerPose,['Index','Middle'],{timeout:10000});
   await page.screenshot({path:'test-results/fullbody-tracked-v-sign.png'});
+
+  // Turning a raised palm over rolls it around wrist -> middle MCP, which is
+  // not generally the elbow -> wrist axis. Testing only forearm-axis twist
+  // missed the old 85-degree swing cap that stopped the real mesh halfway.
+  await page.evaluate(async ()=>{
+    const {Vector3,Quaternion}=await import('three');
+    testPose=null;testInterval=40;testLatency=0;
+    window.testPalmInput=structuredClone(testHands.worldLandmarks);
+    window.rawPalm=side=>{
+      const rig=testViewer.avatar.vrm.humanoid;
+      const point=name=>rig.getRawBoneNode(side+name).getWorldPosition(new Vector3());
+      const wrist=point('Hand'),forward=point('MiddleProximal').sub(wrist).normalize();
+      const across=point('IndexProximal').sub(point('LittleProximal')).normalize();
+      return {normal:across.cross(forward).normalize(),wrist};
+    };
+    window.turnPalms=angle=>{
+      testHands.worldLandmarks=testPalmInput.map(points=>{
+        const wrist=new Vector3(points[0].x,points[0].y,points[0].z);
+        const middle=points[9],axis=new Vector3(middle.x,middle.y,middle.z).sub(wrist).normalize();
+        const rotation=new Quaternion().setFromAxisAngle(axis,angle);
+        return points.map(point=>{
+          const p=new Vector3(point.x,point.y,point.z).sub(wrist).applyQuaternion(rotation).add(wrist);
+          return {...point,x:p.x,y:p.y,z:p.z};
+        });
+      });
+    };
+  });
+  await page.waitForFunction(handsBesideFace,null,{timeout:10000});
+  await page.waitForFunction(rawFingerPose,['Index','Middle'],{timeout:10000});
+  await page.evaluate(()=>{
+    window.testPalmStart=Object.fromEntries(['left','right'].map(side=>[side,rawPalm(side).normal]));
+    window.testPalmMaxWristError=0;
+    window.testPalmSampling=true;
+    const sample=()=>{
+      if(!testPalmSampling)return;
+      for(const side of ['left','right']) {
+        const avatar=testViewer.avatar,target=avatar.rig.imageWristTarget(avatar.solution.armTargets[side]);
+        testPalmMaxWristError=Math.max(testPalmMaxWristError,rawPalm(side).wrist.distanceTo(target));
+      }
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  for(let step=1;step<=12;step++) {
+    await page.evaluate(angle=>turnPalms(angle),step*Math.PI/12);
+    await page.waitForTimeout(60);
+  }
+  try {
+    await page.waitForFunction(()=>['left','right'].every(side=>rawPalm(side).normal.dot(testPalmStart[side])<-.9),null,{timeout:10000});
+  } catch(error) {
+    const values=await page.evaluate(()=>Object.fromEntries(['left','right'].map(side=>[side,rawPalm(side).normal.dot(testPalmStart[side])])));
+    throw new Error('The rendered palm must turn fully over around its own longitudinal axis: '+JSON.stringify(values),{cause:error});
+  } finally {
+    await page.evaluate(()=>{testPalmSampling=false;});
+  }
+  assert.ok(await page.evaluate(()=>testPalmMaxWristError<.04),'turning the palm over must preserve the IK wrist position');
+  await page.waitForFunction(rawFingerPose,['Index','Middle'],{timeout:10000});
+  await page.waitForFunction(handsBesideFace,null,{timeout:10000});
+  await page.evaluate(()=>turnPalms(0));
+  await page.waitForFunction(()=>['left','right'].every(side=>rawPalm(side).normal.dot(testPalmStart[side])>.9),null,{timeout:10000});
   await page.evaluate(()=>{testPose=null; setGesture([5,9,13,17]);});
   await page.waitForFunction(handsBesideFace,null,{timeout:10000});
   await page.evaluate(()=>{
@@ -419,6 +480,53 @@ try {
   assert.ok(await page.evaluate(()=>testViewer.avatar.vrm.scene.matrixWorld.determinant()>0));
   await page.locator('[data-setting="mirrorAvatar"]').uncheck();
   await page.waitForFunction(oneRaisedHand,'left',{timeout:10000});
+
+  // A brand-new hand can be confidently misclassified during its first two
+  // detections. Without visible Pose wrists, wait for stable identity before
+  // animating either arm: eventual correction alone still flashes the wrong
+  // arm on stream. Inspect every rendered frame, not just the final assignment.
+  for(const side of ['right','left']) {
+    await page.locator('#camera').click();
+    await page.evaluate(()=>{testHands=null;testPose=null;testInterval=40;testLatency=0;});
+    await page.waitForFunction(()=>{
+      const rig=testViewer.avatar.vrm.humanoid;
+      const height=name=>{const node=rig.getRawBoneNode(name);return node.getWorldPosition(node.position.clone()).y;};
+      return ['left','right'].every(side=>height(side+'Hand')<height('chest')-.15);
+    },null,{timeout:10000});
+    await page.evaluate(side=>{
+      const index=side==='left'?0:1,other=side==='left'?'right':'left';
+      const image=structuredClone(bothHands.landmarks[index]);
+      // Keep the screen position ambiguous; side comes from stable evidence,
+      // never from treating the left half of the image as the anatomical left.
+      const shift=.38-image[0].x;
+      image.forEach(point=>point.x+=shift);
+      testHands={landmarks:[image],worldLandmarks:[structuredClone(bothHands.worldLandmarks[index])],handedness:[]};
+      window.testAcquisitionFrames=0;
+      window.testBeforeDetectorTick=()=>{
+        const label=++testAcquisitionFrames<=2?other:side;
+        testHands.handedness=[[{categoryName:label==='left'?'Left':'Right',score:.99}]];
+      };
+      window.testWrongArmHighest=-Infinity;
+      window.testAcquisitionSampling=true;
+      const sample=()=>{
+        if(!testAcquisitionSampling)return;
+        const rig=testViewer.avatar.vrm.humanoid;
+        const height=name=>{const node=rig.getRawBoneNode(name);return node.getWorldPosition(node.position.clone()).y;};
+        testWrongArmHighest=Math.max(testWrongArmHighest,height(other+'Hand')-height('chest'));
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    },side);
+    await page.locator('#camera').click();
+    try {
+      await page.waitForFunction(oneRaisedHand,side,{timeout:10000});
+      const acquisition=await page.evaluate(()=>({frames:testAcquisitionFrames,highest:testWrongArmHighest}));
+      assert.ok(acquisition.frames>2,'the classifier must actually pass through its initial wrong-label frames');
+      assert.ok(acquisition.highest<-.08,`a newly acquired ${side} hand must never flash the opposite arm: ${JSON.stringify(acquisition)}`);
+    } finally {
+      await page.evaluate(()=>{testAcquisitionSampling=false;testBeforeDetectorTick=null;});
+    }
+  }
   await page.evaluate(()=>{testPose=null;testHands=structuredClone(bothHands);});
   await page.waitForFunction(handsBesideFace,null,{timeout:10000});
 
@@ -502,7 +610,7 @@ try {
   assert.equal(await standalone.locator('#camera-preview').isVisible(),false);
   await standalone.close();
   assert.deepEqual(errors,[]);
-  console.log('Browser UI: direct-URL autostart, clean capture/idle controls, preview approval/cancel/Escape/reset, authored model/PNG orientation, saved model/settings, invalid VRM recovery, calibration, 4fps + 220ms delay, stationary wrists, cropped torso, fist/V fingers, hand identity/motion mirror, expression mesh and five vowels, frozen popup/standalone output, stop/reset and mobile layout passed.');
+  console.log('Browser UI: direct-URL autostart, clean capture/idle controls, preview approval/cancel/Escape/reset, authored model/PNG orientation, saved model/settings, invalid VRM recovery, calibration, 4fps + 220ms delay, stationary wrists, cropped torso, fist/V fingers, complete palm turnover, hand identity/acquisition/motion mirror, expression mesh and five vowels, frozen popup/standalone output, stop/reset and mobile layout passed.');
 } finally {
   await browser?.close();
   await new Promise(resolve=>server.close(resolve));

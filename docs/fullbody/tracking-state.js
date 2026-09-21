@@ -133,7 +133,7 @@ function poseHandSide(observation, pose) {
 function newHandTrack() {
   return {
     seenAt: -Infinity, wrist: null, velocity: { x: 0, y: 0 }, id: null,
-    identityConflict: null,
+    identityConflict: null, acquisition: null, confirmed: false, outputSide: null,
     imageOrigin: new AdaptiveVector({ minCutoff: 1.5, beta: 7, maxJump: 0.2 }),
     // Native Hand landmarks carry a default visibility:0. It is not a measured
     // score; rejecting it would bypass all finger smoothing on real cameras.
@@ -154,7 +154,10 @@ function newHandTrack() {
  * increases only for a new capture. Duplicate or older captures return the
  * previous snapshot without refreshing it or applying any filter a second time.
  *
- * Hands appear only when observed. Their arrays are ordered Left then Right,
+ * Hands appear only when observed and their side has been confirmed over time.
+ * New/returning detections warm their filters while withholding uncertain arm
+ * targets; pendingSides also tells the body solver which Pose arm estimates to
+ * hold. Their arrays are ordered Left then Right,
  * with canonical handedness labels and matching trackingIds. Recent identity
  * history survives short occlusions, but absent hands are never fabricated.
  * FaceSolver should continue to handle expression/head smoothing itself.
@@ -203,6 +206,14 @@ export class TrackingState {
       const missedSample = track.seenAt < previousCaptureTime;
       const stalled = time - previousCaptureTime > 2;
       if (time - track.seenAt > this.identityTtl && (missedSample || stalled)) this.tracks[side] = newHandTrack();
+      else if (missedSample) {
+        // A newly visible palm can be the other hand entering the same patch of
+        // the image. Keep physical/filter history, but re-confirm its identity
+        // before reusing the previous arm's target.
+        track.confirmed = false;
+        track.acquisition = null;
+        track.identityConflict = null;
+      }
     }
     if (!hands) {
       for (const track of Object.values(this.tracks)) track.identityConflict = null;
@@ -219,7 +230,11 @@ export class TrackingState {
       }, 0);
       observations = [observations[reliability(observations[1]) > reliability(observations[0]) ? 1 : 0]];
     }
-    for (const observation of observations) observation.poseSide = poseHandSide(observation, pose);
+    for (const observation of observations) {
+      observation.poseSide = poseHandSide(observation, pose);
+      observation.evidenceSide = observation.poseSide ??
+        (observation.category.confidence >= 0.75 ? observation.category.label : null);
+    }
     const assignments = observations.length === 2
       ? [[['Left', observations[0]], ['Right', observations[1]]], [['Left', observations[1]], ['Right', observations[0]]]]
       : observations.length ? [[['Left', observations[0]]], [['Right', observations[0]]]] : [[]];
@@ -241,23 +256,36 @@ export class TrackingState {
       a.reduce((total, [side, observation]) => total + cost(side, observation), 0) -
       b.reduce((total, [side, observation]) => total + cost(side, observation), 0));
     const temporalAssignment = assignments[0];
-    // Continuity rejects a one-frame classifier flip, but must not permanently
-    // lock in an incorrect first label. Correct only a sustained, confident
-    // contradiction. A destination's stale history must not block correction:
-    // alternating raised hands commonly reuse the same patch of the image.
+    // Neither Hand's label nor Pose's anatomical wrist is trustworthy on its
+    // very first sample. Pose used to override continuity unconditionally here,
+    // making a single bad frame raise the opposite arm. Confirm contradictions
+    // over capture time, with faster correction when both detectors agree.
     const contradicted = new Set();
     for (const [side, observation] of temporalAssignment) {
       const label = observation.category.label;
       const track = this.tracks[side];
-      if (!observation.poseSide && track.wrist && label && label !== side && observation.category.confidence >= 0.9) {
+      if (!track.confirmed) {
+        observation.confirmedSide = observation.evidenceSide;
+        continue;
+      }
+      const contradiction = observation.poseSide && observation.poseSide !== side ? observation.poseSide :
+        !observation.poseSide && label !== side && observation.category.confidence >= 0.9 ? label : null;
+      if (contradiction) {
         contradicted.add(track);
-        const conflict = track.identityConflict?.label === label
-          ? track.identityConflict : { label, count: 0, since: time };
+        const poseEvidence = observation.poseSide === contradiction;
+        const corroborated = poseEvidence && label === contradiction && observation.category.confidence >= 0.75;
+        const source = poseEvidence ? corroborated ? 'both' : 'pose' : 'label';
+        const conflict = track.identityConflict?.label === contradiction && track.identityConflict.source === source
+          ? track.identityConflict : { label: contradiction, source, count: 0, since: time };
         conflict.count++;
         track.identityConflict = conflict;
-        const destination = this.tracks[label];
+        const destination = this.tracks[contradiction];
         const occupied = destination.wrist && time - destination.seenAt <= this.identityTtl;
-        if (conflict.count >= 3 && time - conflict.since >= 0.5 && !occupied) observation.confirmedSide = label;
+        const duration = poseEvidence ? corroborated ? 0.12 : 0.18 : 0.5;
+        const minimumSamples = poseEvidence ? 2 : 3;
+        if (conflict.count >= minimumSamples && time - conflict.since + 1e-8 >= duration &&
+            (poseEvidence || !occupied)) observation.confirmedSide = contradiction;
+        else if (corroborated) observation.holdIdentity = true;
       }
     }
     for (const track of Object.values(this.tracks)) {
@@ -265,8 +293,7 @@ export class TrackingState {
     }
 
     const anatomicalCost = (side, observation) => cost(side, observation) +
-      (observation.poseSide && observation.poseSide !== side ? 4 : 0) +
-      (observation.confirmedSide && observation.confirmedSide !== side ? 2 : 0);
+      (observation.confirmedSide && observation.confirmedSide !== side ? 4 : 0);
     assignments.sort((a, b) =>
       a.reduce((total, [side, observation]) => total + anatomicalCost(side, observation), 0) -
       b.reduce((total, [side, observation]) => total + anatomicalCost(side, observation), 0));
@@ -278,7 +305,6 @@ export class TrackingState {
       if (formerSide !== side) {
         this.tracks[side] = previousTracks[formerSide];
         this.tracks[side].identityConflict = null;
-        releasedSides.push(formerSide.toLowerCase());
       }
     }
     for (const side of SIDES) {
@@ -287,13 +313,25 @@ export class TrackingState {
     }
     const output = {
       ...hands, landmarks: [], worldLandmarks: [], handedness: [], trackingIds: [], physicalTrackingIds: [],
-      observedAt: [], releasedSides, identitiesStable: true,
+      observedAt: [], releasedSides, identitiesStable: true, pendingCount: 0, pendingSides: [],
     };
     for (const side of SIDES) {
       const observation = assignment.find(([assigned]) => assigned === side)?.[1];
       if (!observation) continue;
       const track = this.tracks[side];
       track.id ??= this.nextHandId++;
+      if (!track.confirmed) {
+        if (observation.evidenceSide === side) {
+          const acquisition = track.acquisition?.side === side
+            ? track.acquisition : { side, since: time, count: 0 };
+          acquisition.count++;
+          track.acquisition = acquisition;
+          const label = observation.category.confidence >= 0.75 ? observation.category.label : null;
+          const duration = observation.poseSide && label
+            ? observation.poseSide === label ? 0.08 : 0.16 : 0.1;
+          track.confirmed = acquisition.count >= 2 && time - acquisition.since + 1e-8 >= duration;
+        } else track.acquisition = null;
+      }
       const image = centeredHand(observation.points, time, track.imageOrigin, track.imageOffsets);
       const world = centeredHand(observation.world, time, track.worldOrigin, track.worldOffsets);
       // Identity follows accepted wrist observations, not noisy smoothed lag.
@@ -307,6 +345,12 @@ export class TrackingState {
       }
       track.wrist = vector(wrist);
       track.seenAt = time;
+      if (!track.confirmed || observation.holdIdentity) {
+        output.pendingCount++;
+        continue;
+      }
+      if (track.outputSide && track.outputSide !== side) releasedSides.push(track.outputSide.toLowerCase());
+      track.outputSide = side;
       const { label, confidence, ...category } = observation.category;
       output.landmarks.push(image);
       output.worldLandmarks.push(world);
@@ -315,6 +359,12 @@ export class TrackingState {
       output.physicalTrackingIds.push(track.id);
       output.observedAt.push(receivedAt);
     }
+    // A pending detection must not bypass the gate by raising an uncertain
+    // Pose-only arm. Confirmed observed hands remain live, including two hands
+    // crossing each other; only the remaining possible sides are held.
+    const uncertainSides = output.pendingCount ? SIDES : SIDES.filter(side =>
+      Object.values(this.tracks).some(track => track.identityConflict?.label === side));
+    output.pendingSides = uncertainSides.filter(side => !output.trackingIds.includes(side)).map(side => side.toLowerCase());
     // The Tasks API used both names across releases. Keep either reader aligned.
     output.handednesses = output.handedness;
     return output;

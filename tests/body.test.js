@@ -60,6 +60,26 @@ function measuredDirection(bones, from, to) {
   return bones[to].getWorldPosition(new Vector3()).sub(bones[from].getWorldPosition(new Vector3())).normalize();
 }
 
+test('uncertain hand acquisition cannot raise the opposite arm through Pose while other motion continues', () => {
+  const { bones, rig } = rigFixture();
+  const pose = poseFixture();
+  // Pose guesses that the left arm has just risen, before Hand identity settles.
+  pose.worldLandmarks[0][13] = point(.3, .8);
+  pose.worldLandmarks[0][15] = point(.3, 1.1);
+  const pending = { landmarks: [], worldLandmarks: [], pendingCount: 1, pendingSides: ['left'] };
+  const gated = solveBody(pose, pending);
+  rig.update(gated, 1, 1, 4, { bodySmoothing: .001 });
+  const height = name => bones[name].getWorldPosition(new Vector3()).y;
+  assert.ok(height('leftHand') < height('chest') - .4, 'pending classification must leave the speculative arm down');
+  assert.ok(Math.abs(height('rightHand') - height('chest')) < .001, 'unaffected Pose arm must still track');
+  assert.ok(gated.torso && gated.directions.leftUpperLeg, 'confirmation must not freeze torso or legs');
+  const resolved = solveBody(pose, { ...pending, pendingCount: 0, pendingSides: [] });
+  rig.update(resolved, 1.1, 1.1, 4, { bodySmoothing: .001 });
+  assert.ok(height('leftHand') > height('chest') + .4, 'confirmed side resumes Pose tracking');
+  const disabled = solveBody(pose, pending, { trackHands: false });
+  assert.ok(disabled.directions.leftUpperArm, 'disabling Hands must leave Pose tracking available');
+});
+
 test('camera coordinates and orthonormal torso basis preserve front-facing T stance', () => {
   nearVector(landmarkVector({ x: 1, y: 2, z: 3 }), new Vector3(1, -2, -3));
   assert.equal(landmarkVector({ x: NaN, y: 0, z: 0 }), null);

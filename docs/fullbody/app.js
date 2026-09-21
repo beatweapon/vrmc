@@ -143,7 +143,9 @@ function applyResults(results) {
   const bodySeen = [11,12].every(confidence);
   const legsSeen = [25,26,27,28,31,32].every(confidence);
   const handCount = observation.hands?.landmarks?.length || 0;
-  for (const [id, active, label] of [['face-state',face.tracked,`顔 ${face.tracked?'●':'—'}`],['body-state',bodySeen,`体 ${bodySeen?(settings.seated?'着席':legsSeen?'全身':'上半身'):'—'}`],['hands-state',!!handCount,`手 ${settings.trackHands?`${handCount}/2`:'OFF'}`]]) {
+  const pendingHands = observation.hands?.pendingCount || 0;
+  const handLabel = !settings.trackHands ? 'OFF' : pendingHands ? `${handCount}/2 · 左右を確認中` : `${handCount}/2`;
+  for (const [id, active, label] of [['face-state',face.tracked,`顔 ${face.tracked?'●':'—'}`],['body-state',bodySeen,`体 ${bodySeen?(settings.seated?'着席':legsSeen?'全身':'上半身'):'—'}`],['hands-state',!!handCount,`手 ${handLabel}`]]) {
     $(id).textContent = label;
     $(id).dataset.active = String(active);
   }
@@ -422,7 +424,7 @@ function animate(now) {
 }
 
 async function init() {
-  $('build-version').textContent = 'Full Body · 2026.09.14.1';
+  $('build-version').textContent = 'Full Body · 2026.09.21.1';
   try {
     viewer = new Viewer($('stage'), {interactive:!isOutput, onViewChange:view=>post({type:'view',view})});
     viewer.setDisplay(settings);

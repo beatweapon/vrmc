@@ -78,6 +78,7 @@ const observedHand = (label, x = 0.65, score = 0.99) => ({
 
 test('a mistaken initial hand label recovers after sustained high-confidence evidence without restarting the camera', () => {
   const state = new TrackingState();
+  assert.deepEqual(state.update({ time: -0.1, hands: observedHand('Left') }).hands.trackingIds, []);
   assert.deepEqual(state.update({ time: 0, hands: observedHand('Left') }).hands.trackingIds, ['Left']);
   // A short classifier fluctuation does not swap the animated arm.
   for (const time of [0.1, 0.2, 0.3, 0.4]) {
@@ -92,6 +93,7 @@ test('a mistaken initial hand label recovers after sustained high-confidence evi
 
 test('identity correction needs three confident observations and an unbroken contradiction', () => {
   const state = new TrackingState();
+  state.update({ time: -0.1, hands: observedHand('Left') });
   state.update({ time: 0, hands: observedHand('Left') });
   state.update({ time: 0.2, hands: observedHand('Right') });
   const onlyTwo = state.update({ time: 0.75, hands: observedHand('Right') });
@@ -101,9 +103,10 @@ test('identity correction needs three confident observations and an unbroken con
   state.update({ time: 1.0, hands: observedHand('Right') });
   assert.deepEqual(state.update({ time: 1.1, hands: observedHand('Right') }).hands.trackingIds, ['Left']);
   state.update({ time: 1.2, hands: null });
-  state.update({ time: 1.3, hands: observedHand('Right') });
+  assert.deepEqual(state.update({ time: 1.3, hands: observedHand('Right') }).hands.trackingIds, [],
+    'after a missing detection the returned palm must acquire its identity again');
   state.update({ time: 1.4, hands: observedHand('Right') });
-  assert.deepEqual(state.update({ time: 1.5, hands: observedHand('Right') }).hands.trackingIds, ['Left']);
+  assert.deepEqual(state.update({ time: 1.5, hands: observedHand('Right') }).hands.trackingIds, ['Right']);
   assert.deepEqual(state.update({ time: 1.85, hands: observedHand('Right') }).hands.trackingIds, ['Right']);
 });
 
@@ -111,11 +114,13 @@ test('a classifier contradiction cannot take over a recently observed opposite h
   const state = new TrackingState();
   const left = observedHand('Left', 0.7);
   const right = observedHand('Right', 0.3);
-  state.update({ time: 0, hands: {
+  const initial = {
     landmarks: [...left.landmarks, ...right.landmarks],
     worldLandmarks: [...left.worldLandmarks, ...right.worldLandmarks],
     handedness: [...left.handedness, ...right.handedness],
-  } });
+  };
+  state.update({ time: -0.1, hands: initial });
+  state.update({ time: 0, hands: initial });
   for (const time of [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]) {
     assert.deepEqual(state.update({ time, hands: observedHand('Right', 0.7) }).hands.trackingIds, ['Left']);
   }

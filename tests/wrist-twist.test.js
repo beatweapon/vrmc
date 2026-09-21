@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Object3D, Quaternion, Vector3 } from 'three';
-import { BodyRetargeter, solveBody } from '../docs/fullbody/body.js';
+import { BodyRetargeter, solveBody, basisQuaternion } from '../docs/fullbody/body.js';
 import { constrainWristRotation, WRIST_LIMITS } from '../docs/fullbody/hand-rig.js';
 
 const rad = degrees => degrees * Math.PI / 180;
@@ -100,7 +100,7 @@ test('ordinary palm roll moves the forearm while preserving the world palm, fing
   }
 });
 
-test('180-degree boundary jitter and quaternion sign flips cannot reverse a saturated wrist', () => {
+test('180-degree boundary jitter and quaternion sign flips preserve the observed palm without unwinding', () => {
   for (const side of ['left', 'right']) {
     const { bones, rig } = fixture(true);
     const name = `${side}Hand`;
@@ -117,7 +117,8 @@ test('180-degree boundary jitter and quaternion sign flips cannot reverse a satu
       if (index > 35) assert.ok(forearm.angleTo(previous) < .02, 'boundary jitter must not unwind the forearm');
       previous = forearm;
     }
-    assert.ok(world(bones[`${side}LowerArm`]).angleTo(rig.rest[`${side}LowerArm`].world) > rad(99));
+    assert.ok(world(bones[`${side}LowerArm`]).angleTo(rig.rest[`${side}LowerArm`].world) > rad(175), 'the dorsum must reach a half-turn instead of stopping at the former roll cap');
+    assert.ok(world(bones[name]).angleTo(new Quaternion().setFromAxisAngle(axis, Math.PI).multiply(rig.rest[name].world)) < rad(2));
   }
 });
 
@@ -140,6 +141,7 @@ test('held targets do not accumulate distributed forearm roll and tracking loss 
   for (let index = 0; index < 360; index++) rig.update(noHand, 5 + index / 60, 5 + index / 60, 1 / 60);
   nearRotation(bones.leftHand.quaternion, rig.rest.leftHand.local, .0001);
   nearRotation(world(bones.leftLowerArm), rig.rest.leftLowerArm.world, .0001);
+  nearRotation(world(bones.leftUpperArm), rig.rest.leftUpperArm.world, .0001);
   rig.releaseArm('left', 12);
   assert.equal(rig.wristRotations.has('left'), false, 'side reassignment and mirror switching clear the wrist history');
 });
@@ -155,6 +157,27 @@ test('extreme palm swing remains finite and bounded even during smoothing and an
   }
   assert.equal(constrainWristRotation(new Quaternion(NaN, 0, 0, 1), new Vector3(1, 0, 0)), null);
   assert.equal(constrainWristRotation(new Quaternion(), new Vector3()), null);
+});
+
+test('reacquisition after crossing the roll branch cannot revive an old shoulder turn', () => {
+  const { rig, bones } = fixture();
+  let time = 1;
+  for (let degrees = 0; degrees <= 250; degrees += 5) {
+    const desired = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), rad(degrees));
+    rig.update(observation(rig, 'left', desired), time, time, 1, { bodySmoothing: .001 });
+    time += 1 / 30;
+  }
+  const noHand = observation(rig, 'left', new Quaternion());
+  noHand.hands = {};
+  for (let frame = 0; frame < 420; frame++) {
+    time += 1 / 60;
+    rig.update(noHand, time, time, 1 / 60);
+  }
+  const neutral = observation(rig, 'left', new Quaternion());
+  rig.update(neutral, time + 1, time + 1, 1, { bodySmoothing: .001 });
+  nearRotation(world(bones.leftUpperArm), rig.rest.leftUpperArm.world, .0001);
+  nearRotation(world(bones.leftLowerArm), rig.rest.leftLowerArm.world, .0001);
+  nearRotation(world(bones.leftHand), rig.rest.leftHand.world, .0001);
 });
 
 test('sharing forearm roll preserves a raised IK target beside the face', () => {
@@ -175,4 +198,32 @@ test('sharing forearm roll preserves a raised IK target beside the face', () => 
   assert.ok(position(bones.leftHand).distanceTo(target) < 1e-7);
   nearRotation(world(bones.leftHand), desired);
   assertWristBounded(rig, 'left');
+});
+
+test('a face-height palm-to-dorsum sweep follows the measured palm long axis through a half-turn', () => {
+  for (const side of ['left', 'right']) for (const arbitraryAxes of [false, true]) for (const turnDirection of [-1, 1]) {
+    const { rig, bones } = fixture(arbitraryAxes);
+    const solution = observation(rig, side, new Quaternion());
+    solution.armTargets[side] = {
+      aspect: 1, shoulders: { x: .5, y: .55, span: .4 }, wrist: { x: side === 'left' ? .74 : .26, y: .29 },
+    };
+    const forward = new Vector3(0, 1, 0);
+    const frontPalm = basisQuaternion(new Vector3(side === 'left' ? -1 : 1, 0, 0), forward);
+    const bind = rig.handRig.hands[side];
+    let originalPosition;
+    for (let degrees = 0; degrees <= 180; degrees += 3) {
+      const palm = new Quaternion().setFromAxisAngle(forward, turnDirection * rad(degrees)).multiply(frontPalm);
+      const desired = palm.clone().multiply(bind.palmInverse).multiply(bind.wristWorld);
+      if (degrees % 2) desired.fromArray(desired.toArray().map(value => -value));
+      solution.hands = observation(rig, side, desired).hands;
+      const fingerTargets = rig.handRig.solve(solution.hands[side]).rotations;
+      rig.update(solution, 1 + degrees / 90, 1 + degrees / 90, 1, { bodySmoothing: .001 });
+      originalPosition ??= position(bones[`${side}Hand`]);
+      assert.ok(position(bones[`${side}Hand`]).distanceTo(originalPosition) < 1e-7);
+      const error = world(bones[`${side}Hand`]).angleTo(desired) * 180 / Math.PI;
+      assert.ok(error < 1, `${side} arbitrary=${arbitraryAxes} palm roll=${turnDirection * degrees} error=${error.toFixed(2)}deg`);
+      assertWristBounded(rig, side);
+      for (const [name, expected] of fingerTargets) nearRotation(bones[name].quaternion, expected);
+    }
+  }
 });

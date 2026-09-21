@@ -29,6 +29,7 @@ function mirrorHands(hands) {
     handedness: categories(hands.handedness), handednesses: categories(hands.handednesses),
     trackingIds: hands.trackingIds?.map(otherSide),
     releasedSides: hands.releasedSides?.map(otherSide),
+    pendingSides: hands.pendingSides?.map(otherSide),
     // Physical IDs refer to the observed person, so they must not be reassigned.
   };
 }

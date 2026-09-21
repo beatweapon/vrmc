@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Object3D, Quaternion, Vector3 } from 'three';
-import { VRMHumanoid } from '@pixiv/three-vrm';
+import { VRMHumanoid, VRMUtils } from '@pixiv/three-vrm';
 import { TrackingState } from '../docs/fullbody/tracking-state.js';
 import { BodyRetargeter, solveBody, TRACKED_BONES } from '../docs/fullbody/body.js';
 import { WRIST_LIMITS } from '../docs/fullbody/hand-rig.js';
 
 const photo = JSON.parse(readFileSync(new URL('./fixtures/pointing-up-landmarks.json', import.meta.url)));
 
-function sampleRig() {
+function sampleRig(vrm0 = false) {
   // Rebuild the shipped GLB's original transforms and humanoid mapping. There
   // are no authored test finger axes: these are the avatar's actual raw bones.
   const bytes = readFileSync(new URL('../docs/models/VRM1_Constraint_Twist_Sample.vrm', import.meta.url));
@@ -31,8 +31,14 @@ function sampleRig() {
   scene.updateWorldMatrix(true, true);
   const humanBones = Object.fromEntries(Object.entries(json.extensions.VRMC_vrm.humanoid.humanBones)
     .map(([name, { node }]) => [name, { node: nodes[node] }]));
+  // Exercise the VRM 0 coordinate convention through the actual normalized
+  // transfer, while retaining the sample model's original bone axes.
+  if (vrm0) humanBones.hips.node.rotation.y += Math.PI;
+  scene.updateWorldMatrix(true, true);
   const humanoid = new VRMHumanoid(humanBones);
   scene.add(humanoid.normalizedHumanBonesRoot);
+  if (vrm0) VRMUtils.rotateVRM0({ scene, meta: { metaVersion: '0' } });
+  scene.updateWorldMatrix(true, true);
   const normalized = Object.fromEntries(TRACKED_BONES.map(name => [name, humanoid.getNormalizedBoneNode(name)]));
   return {
     humanoid,
@@ -103,6 +109,15 @@ for (const side of ['right', 'left']) {
 
 const native = JSON.parse(readFileSync(new URL('./fixtures/pointing-up-native.json', import.meta.url))).result;
 
+function confirmNativeHand(state, input) {
+  let frame;
+  for (let step = 0; step <= 6; step++) {
+    const time = input.time + step / 30;
+    frame = state.update({ ...input, time }, time + .1);
+  }
+  return frame;
+}
+
 test('unmodified SDK hand result reaches a raised raw VRM wrist and fingers through the full observation pipeline', () => {
   const { humanoid, rig, raw } = sampleRig();
   const input = structuredClone(native);
@@ -110,7 +125,7 @@ test('unmodified SDK hand result reaches a raised raw VRM wrist and fingers thro
   // Its zero visibility reproduces the native Face container as well.
   const face = Array.from({length:478},()=>({x:.65,y:.7,z:0,visibility:0}));
   for (const [index,x] of [[33,.604],[133,.624],[362,.676],[263,.696]]) face[index].x=x;
-  const observation = new TrackingState().update(input, input.time + .1);
+  const observation = confirmNativeHand(new TrackingState(), input);
   assert.equal(observation.hands.landmarks[0][0].visibility, 0);
   const solved = solveBody({...observation.pose,imageWidth:720,imageHeight:720}, observation.hands,
     {minVisibility:.9}, face);
@@ -138,9 +153,9 @@ test('unmodified SDK hand result reaches a raised raw VRM wrist and fingers thro
 test('native zero-visibility hand articulation is filtered without changing its confidence metadata', () => {
   const state=new TrackingState();
   const input=structuredClone(native);
-  const before=state.update(input,input.time+.1);
+  const before=confirmNativeHand(state,input);
   const original=before.hands.worldLandmarks[0][6].y;
-  input.time+=1/30;
+  input.time=before.captureTime+1/30;
   input.hands.worldLandmarks[0][6].y+=.006;
   const after=state.update(input,input.time+.1);
   const change=after.hands.worldLandmarks[0][6].y-original;
@@ -149,11 +164,17 @@ test('native zero-visibility hand articulation is filtered without changing its 
 });
 
 test('a half-turn palm observation cannot concentrate a half-turn in the sample VRM raw wrist', () => {
-  for (const side of ['left', 'right']) {
-    const { humanoid, rig, raw } = sampleRig();
+  for (const side of ['left', 'right']) for (const vrm0 of [false, true]) {
+    const { humanoid, rig, raw } = sampleRig(vrm0);
     const wrist = raw[`${side}Hand`];
     const lower = raw[`${side}LowerArm`];
+    const upper = raw[`${side}UpperArm`];
     const restLocal = wrist.quaternion.clone();
+    const lowerRestLocal = lower.quaternion.clone();
+    const upperRestLocal = upper.quaternion.clone();
+    const rawRestWorld = wrist.getWorldQuaternion(new Quaternion());
+    const lowerLocalAxis = wrist.getWorldPosition(new Vector3()).sub(lower.getWorldPosition(new Vector3())).normalize()
+      .applyQuaternion(lower.getWorldQuaternion(new Quaternion()).invert());
     const restPosition = wrist.getWorldPosition(new Vector3());
     const forearmAxis = rig.rest[`${side}LowerArm`].direction;
     const desired = new Quaternion().setFromAxisAngle(forearmAxis, Math.PI - .01).multiply(rig.rest[`${side}Hand`].world);
@@ -176,5 +197,15 @@ test('a half-turn palm observation cannot concentrate a half-turn in the sample 
       'normalized-to-raw transfer must retain the bounded wrist twist');
     assert.ok(wrist.getWorldPosition(new Vector3()).distanceTo(restPosition) < .00001,
       'roll distribution must not move the actual VRM wrist');
+    const lowerDelta = lowerRestLocal.clone().invert().multiply(lower.quaternion);
+    const elbowTwist = 2 * Math.atan2(lowerDelta.x * lowerLocalAxis.x + lowerDelta.y * lowerLocalAxis.y + lowerDelta.z * lowerLocalAxis.z, lowerDelta.w);
+    assert.ok(Math.abs(Math.atan2(Math.sin(elbowTwist), Math.cos(elbowTwist))) < 110 * Math.PI / 180,
+      'the half-turn must not simply transfer the wrist pinch to the raw elbow joint');
+    const shoulderRotation = upper.quaternion.angleTo(upperRestLocal);
+    assert.ok(shoulderRotation > 70 * Math.PI / 180 && shoulderRotation < 110 * Math.PI / 180,
+      'the upper arm shares the axial turn without changing either IK endpoint');
+    const expectedRawWorld = desired.clone().multiply(rig.rest[`${side}Hand`].world.clone().invert()).multiply(rawRestWorld);
+    assert.ok(wrist.getWorldQuaternion(new Quaternion()).angleTo(expectedRawWorld) < .00001,
+      'the raw hand actually reaches the observed half-turn');
   }
 });

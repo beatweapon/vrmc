@@ -73,7 +73,7 @@ function sampleAvatar(vrm0 = false) {
 test('mirrored observations swap anatomical limbs while retaining camera confidence and source data', () => {
   const pose = poseFixture();
   const hands = { ...structuredClone(native.hands), identitiesStable: true, trackingIds: ['right'],
-    physicalTrackingIds: [42], releasedSides: ['left'] };
+    physicalTrackingIds: [42], releasedSides: ['left'], pendingSides: ['left'], pendingCount: 1 };
   const original = structuredClone({ pose, hands });
   const mirrored = mirrorBodyInput(pose, hands);
   assert.deepEqual({ pose, hands }, original);
@@ -83,6 +83,8 @@ test('mirrored observations swap anatomical limbs while retaining camera confide
   assert.deepEqual(mirrored.hands.trackingIds, ['left']);
   assert.deepEqual(mirrored.hands.physicalTrackingIds, [42]);
   assert.deepEqual(mirrored.hands.releasedSides, ['right']);
+  assert.deepEqual(mirrored.hands.pendingSides, ['right']);
+  assert.equal(mirrored.hands.pendingCount, 1);
   assert.equal(mirrored.hands.landmarks[0][0].visibility, 0);
   const normal = solveBody(pose, null);
   const reflected = solveBody(mirrored.pose, null);
