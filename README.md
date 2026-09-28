@@ -24,6 +24,8 @@ Webカメラ1台で顔・胴体・腕・脚・手指を追跡する、OBS配信�
 
 開発時の検証:
 
+挙動を変更する前に [開発ルール](AGENTS.md) と [配信用の品質基準](docs/fullbody/QUALITY.md) を確認してください。遅延・滑らかさ・姿勢の自然さ・配信事故の防止を、実装前の方式選定から検討します。
+
 ```sh
 npm test
 npm run test:browser
