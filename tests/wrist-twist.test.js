@@ -81,6 +81,25 @@ function assertWristBounded(rig, side) {
   assert.ok(angles.swing <= WRIST_LIMITS.swing + 1e-6, `wrist swing ${angles.swing}`);
 }
 
+test('losing a turned palm releases distributed roll continuously, including the first stale frame', () => {
+  const { rig, bones } = fixture();
+  const side='left', desired = new Quaternion().setFromAxisAngle(new Vector3(1,0,0),rad(155));
+  const tracked=observation(rig,side,desired);
+  for(let i=0;i<120;i++) rig.update(tracked,1+i/60,1+i/60,1/60,{});
+  const missing=observation(rig,side,desired);
+  missing.hands={};
+  const names=['leftUpperArm','leftLowerArm','leftHand'];
+  let previous=names.map(name=>world(bones[name]));
+  for(let i=0;i<180;i++) {
+    const now=3+i/60;
+    rig.update(missing,now,now,1/60,{});
+    const current=names.map(name=>world(bones[name]));
+    current.forEach((rotation,j)=>assert.ok(rotation.angleTo(previous[j])<.2,
+      `${names[j]} snapped on loss at frame ${i}: ${rotation.angleTo(previous[j])}`));
+    previous=current;
+  }
+});
+
 test('ordinary palm roll moves the forearm while preserving the world palm, finger shape, and wrist position', () => {
   for (const arbitraryAxes of [false, true]) for (const side of ['left', 'right']) {
     const { bones, rig } = fixture(arbitraryAxes);
@@ -97,6 +116,28 @@ test('ordinary palm roll moves the forearm while preserving the world palm, fing
     assert.ok(forearmRotation > rad(65) && forearmRotation < rad(90), 'roll must be shared with the forearm');
     assertWristBounded(rig, side);
     for (const [name, expected] of fingerTargets) nearRotation(bones[name].quaternion, expected);
+  }
+});
+
+test('a bent elbow keeps palm pronation out of the upper arm while preserving a full palm turn', () => {
+  for(const side of ['left','right']) {
+    const {bones,rig}=fixture();
+    const bent=solveBody(null,null);
+    bent.directions[side+'UpperArm']=new Vector3(0,-1,0);
+    bent.directions[side+'LowerArm']=new Vector3(0,0,1);
+    rig.update(bent,1,1,1,{bodySmoothing:.001});
+    const base=world(bones[side+'Hand']), upper=world(bones[side+'UpperArm']);
+    const wrist=position(bones[side+'Hand']);
+    for(const degrees of [0,90,180]) {
+      const desired=new Quaternion().setFromAxisAngle(new Vector3(0,0,1),rad(degrees)).multiply(base);
+      const solution=observation(rig,side,desired);
+      solution.directions={...bent.directions};
+      rig.update(solution,2+degrees/90,2+degrees/90,1,{bodySmoothing:.001});
+      nearRotation(world(bones[side+'UpperArm']),upper,.005);
+      nearRotation(world(bones[side+'Hand']),desired,.005);
+      assert.ok(position(bones[side+'Hand']).distanceTo(wrist)<1e-6);
+      assertWristBounded(rig,side);
+    }
   }
 });
 

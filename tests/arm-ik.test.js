@@ -210,7 +210,7 @@ test('unreachable and coincident wrist targets clamp to real limb lengths withou
   const body = solveBody(poseFixture({ shoulders: false }), hands, {}, face);
   rig.update(body, 1, 1, 1, { bodySmoothing: 0.001 });
   const distance = position(bones.leftHand).distanceTo(position(bones.leftUpperArm));
-  assert.ok(distance > 0.59 && distance < 0.6);
+  assert.ok(distance > 0.59 && distance <= 0.6 + 1e-8);
 });
 
 test('missing anchors hold placement briefly; fingers stay observable independently, stale arms release', () => {
@@ -283,14 +283,83 @@ test('a corrected physical hand releases its old arm instead of leaving two rais
   }
 });
 
-test('a newly visible lowered arm overrides the held raised hand position immediately', () => {
+test('a newly visible lowered Pose arm updates the same IK state without a source switch', () => {
   const { bones, rig } = rigFixture();
   const raised = solveBody(poseFixture(), handsFixture(), {}, faceFixture());
   rig.update(raised,1,1,1,{bodySmoothing:.001});
+  const previous = rig.lastArmTargets.get('right').motion;
   const lower = solveBody(null,null);
   lower.directions.rightUpperArm = new Vector3(-.15,-1,0).normalize();
   lower.directions.rightLowerArm = new Vector3(0,-1,0);
   rig.update(lower,1.1,1.1,.1,{bodySmoothing:.02});
-  assert.equal(rig.lastArmTargets.has('right'),false);
+  assert.equal(rig.lastArmTargets.get('right').motion,previous);
+  assert.equal(rig.lastArmTargets.get('right').source,'pose');
   assert.ok(position(bones.rightHand).y<1.15,'fresh Pose evidence must replace the old IK hold');
+});
+
+function croppedPoseWrist(confidence = 1) {
+  const pose = poseFixture();
+  // Elbows remain outside the image, but the wrists are beside the face.
+  for (const [index, sign] of [[15, 1], [16, -1]]) {
+    pose.landmarks[0][index] = imagePoint(.5 + sign * .22, .28, confidence);
+    pose.worldLandmarks[0][index] = worldPoint(sign * .22, .8, .096, confidence);
+  }
+  return pose;
+}
+
+test('Pose wrists drive IK before any Hand detection even with both elbows cropped', () => {
+  const {bones, rig} = rigFixture(), pose = croppedPoseWrist();
+  const solution = solveBody(pose, null, {}, faceFixture());
+  assert.ok(solution.poseArmTargets.left);
+  assert.equal(solution.directions.leftUpperArm, undefined);
+  for (let i = 0; i < 90; i++) rig.update(solution, i/60, i/60, 1/60);
+  assert.equal(rig.lastArmTargets.get('left').source, 'pose');
+  const before = position(bones.leftHand), motion = rig.lastArmTargets.get('left').motion;
+  const hand = solveBody(pose, handsFixture(), {}, faceFixture());
+  for (let i = 90; i < 180; i++) rig.update(hand, i/60, i/60, 1/60);
+  assert.equal(rig.lastArmTargets.get('left').motion, motion, 'Hand must not start another solver');
+  near(position(bones.leftHand), before, .001);
+  assert.ok(before.y > 1.7);
+});
+
+test('Pose wrist visibility has different acquisition and retention gates', () => {
+  const {rig} = rigFixture();
+  const weak = solveBody(croppedPoseWrist(.50), null, {}, faceFixture());
+  rig.update(weak, 1, 1, 1/60);
+  assert.equal(rig.lastArmTargets.size, 0, 'weak Pose alone cannot acquire an arm');
+  rig.update(solveBody(croppedPoseWrist(.60), null, {}, faceFixture()), 1.1, 1.1, 1/60);
+  const motion = rig.lastArmTargets.get('left').motion;
+  for(let i = 1; i <= 120; i++) {
+    const now = 1.1 + i/60;
+    rig.update(weak, now, now, 1/60);
+    assert.equal(rig.lastArmTargets.get('left').motion, motion);
+    assert.equal(rig.lastArmTargets.get('left').time, now, 'retained wrist continues to update');
+  }
+  const lost = solveBody(croppedPoseWrist(.40), null, {}, faceFixture());
+  for(let i = 0; i < 60; i++) rig.update(lost, 4+i/60, 4+i/60, 1/60);
+  assert.equal(rig.lastArmTargets.size, 0, 'genuinely lost Pose must expire');
+});
+
+for (const fps of [4, 10, 24]) test(`Hand acquisition, loss and reacquisition blend within the same Pose IK at ${fps} fps`, () => {
+  const {rig, bones} = rigFixture(), pose = croppedPoseWrist(), hand = handsFixture();
+  hand.landmarks[0][0].y += .08;
+  hand.landmarks[1][0].y += .08;
+  let solution = solveBody(pose, null, {}, faceFixture()), observedAt = 0, previous, solver, maxStep = 0;
+  for (let i = 0; i < 360; i++) {
+    const now = i/60;
+    if (i === 0 || Math.floor(now*fps) !== Math.floor((i-1)/60*fps)) {
+      observedAt = now;
+      const present = now >= 1 && now < 3 || now >= 3.25 && now < 4 || now >= 4.5;
+      solution = solveBody(pose, present ? hand : null, {}, faceFixture());
+    }
+    rig.update(solution, observedAt, now, 1/60);
+    const state = rig.lastArmTargets.get('left');
+    solver ??= state.motion;
+    assert.equal(state.motion, solver);
+    const wrist = position(bones.leftHand), elbow = position(bones.leftLowerArm);
+    if (previous && now > 1) maxStep = Math.max(maxStep, elbow.distanceTo(previous));
+    near(new Vector3(elbow.distanceTo(position(bones.leftUpperArm)), wrist.distanceTo(elbow), 0), new Vector3(.3,.3,0));
+    previous = elbow;
+  }
+  assert.ok(maxStep < .02, `elbow jumped ${maxStep} m on a source change`);
 });

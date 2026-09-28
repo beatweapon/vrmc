@@ -30,6 +30,41 @@ const prime = (state, observations, poseResult) => {
   return state.update({ time: 0, hands: observations, pose: poseResult });
 };
 
+test('alternating hands at one position converge even when duplicate labels disagree with Pose', () => {
+  const state = new TrackingState();
+  prime(state, hands(hand('Left', .72), hand('Right', .28)));
+  let time=0;
+  for (const [side, duplicate] of [['Right',false],['Left',false],['Right',true],['Left',true]]) {
+    const wrong=side==='Left'?'Right':'Left';
+    const observations=[hand(wrong,.38)];
+    if(duplicate) observations.push(hand(side,.38));
+    let frame;
+    for(let i=0;i<25;i++) {
+      time+=.1;
+      frame=state.update({time,hands:hands(...observations),pose:side==='Left'?pose([.38,.3],null):pose(null,[.38,.3])});
+    }
+    assert.deepEqual(frame.hands.trackingIds,[side],JSON.stringify({side,duplicate,tracks:Object.fromEntries(Object.entries(state.tracks).map(([s,t])=>[s,{id:t.id,confirmed:t.confirmed,conflict:t.identityConflict,seen:t.seenAt,acquisition:t.acquisition}]))}));
+  }
+});
+
+test('hand acquisition converges after fast alternating inputs with different switch timings', () => {
+  for(let dwell=1;dwell<=12;dwell++) {
+    const state = new TrackingState();
+    prime(state,hands(hand('Left',.72),hand('Right',.28)));
+    let time=0,frame;
+    for(let change=0;change<8;change++) {
+      const side=change%2?'Left':'Right',wrong=side==='Left'?'Right':'Left';
+      const values=change<2?[hand(wrong,.38)]:[hand(wrong,.38),hand(side,.38)];
+      const input={hands:hands(...values),pose:side==='Left'?pose([.38,.3],null):pose(null,[.38,.3])};
+      for(let tick=0;tick<(change===7?30:dwell);tick++) {
+        time+=.08+(tick%3)*.02;
+        frame=state.update({...input,time});
+      }
+    }
+    assert.deepEqual(frame.hands.trackingIds,['Left'],`switch dwell ${dwell}`);
+  }
+});
+
 test('visible Pose wrists confirm anatomical hands even with absent elbows and mistaken classifier labels', () => {
   const state = new TrackingState();
   const input = { pose: pose([0.25, 0.3], [0.75, 0.3]),

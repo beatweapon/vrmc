@@ -424,7 +424,7 @@ function animate(now) {
 }
 
 async function init() {
-  $('build-version').textContent = 'Full Body · 2026.09.21.1';
+  $('build-version').textContent = 'Full Body · 2026.09.28.1';
   try {
     viewer = new Viewer($('stage'), {interactive:!isOutput, onViewChange:view=>post({type:'view',view})});
     viewer.setDisplay(settings);

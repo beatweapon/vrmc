@@ -9,6 +9,60 @@ import { WRIST_LIMITS } from '../docs/fullbody/hand-rig.js';
 
 const photo = JSON.parse(readFileSync(new URL('./fixtures/pointing-up-landmarks.json', import.meta.url)));
 
+for (const vrm0 of [false, true]) for (const fps of [4, 10, 24]) {
+  test(`VRM ${vrm0 ? 0 : 1} moving raw arms remain continuous while torso turns and Hand/Pose sources alternate at ${fps} fps`, () => {
+    const { humanoid, rig, raw } = sampleRig(vrm0);
+    const position = name => raw[name].getWorldPosition(new Vector3());
+    const lengths = ['left', 'right'].map(side => [position(side+'UpperArm').distanceTo(position(side+'LowerArm')),
+      position(side+'LowerArm').distanceTo(position(side+'Hand'))]);
+    let solution = solveBody(null, null), sampleTime = 0, capture = -1;
+    const previous = {}, maxStep = { elbow: 0, wrist: 0 };
+    for (let i = 0; i < 600; i++) {
+      const now = 1 + i / 60;
+      if (Math.floor(i / 60 * fps) > capture) {
+        capture = Math.floor(i / 60 * fps);
+        sampleTime = now;
+        const phase = Math.min(1, Math.max(0, (i / 60 - 1) / 6));
+        const rise = Math.sin(phase * Math.PI) ** 2;
+        solution = solveBody(null, null);
+        solution.hips = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), .35 * Math.sin(phase * Math.PI * 2));
+        solution.torso = solution.hips.clone();
+        for (const [side, sign] of [['left', 1], ['right', -1]]) {
+          // Same intended motion from either detector, with the elbow omitted
+          // in the Hand frames. Wrist/finger processing must not reset the arm.
+          const upper = new Vector3(sign * .4, -.8 + rise, .25).normalize();
+          const lower = new Vector3(-sign * .25, -.9 + 1.9 * rise, .3).normalize();
+          const index = side === 'left' ? 0 : 1;
+          const target = new Vector3(sign * rig.shoulderWidth / 2, 0, 0)
+            .addScaledVector(upper, lengths[index][0]).addScaledVector(lower, lengths[index][1]);
+          if (capture % 3 === 1) {
+            solution.directions[side+'UpperArm'] = upper;
+            solution.directions[side+'LowerArm'] = lower;
+          } else {
+            solution.armTargets[side] = { aspect: 1, physicalId: index,
+              shoulders: { x: .5, y: .5, span: rig.shoulderWidth, foreshorten: 1 },
+              wrist: { x: .5 + target.x, y: .5 - target.y }, depthRatio: target.z / rig.shoulderWidth };
+          }
+        }
+      }
+      rig.update(solution, sampleTime, now, 1 / 60, {});
+      humanoid.update();
+      for (const [index, side] of ['left', 'right'].entries()) {
+        const shoulder = position(side+'UpperArm'), elbow = position(side+'LowerArm'), wrist = position(side+'Hand');
+        assert.ok(Math.abs(shoulder.distanceTo(elbow) - lengths[index][0]) < 1e-6);
+        assert.ok(Math.abs(elbow.distanceTo(wrist) - lengths[index][1]) < 1e-6);
+        if (previous[side] && i > 60) {
+          maxStep.elbow = Math.max(maxStep.elbow, elbow.distanceTo(previous[side].elbow));
+          maxStep.wrist = Math.max(maxStep.wrist, wrist.distanceTo(previous[side].wrist));
+        }
+        previous[side] = { elbow, wrist };
+      }
+    }
+    assert.ok(maxStep.elbow < .035, `raw elbow jumped: ${JSON.stringify(maxStep)}`);
+    assert.ok(maxStep.wrist < .035, `raw wrist jumped: ${JSON.stringify(maxStep)}`);
+  });
+}
+
 function sampleRig(vrm0 = false) {
   // Rebuild the shipped GLB's original transforms and humanoid mapping. There
   // are no authored test finger axes: these are the avatar's actual raw bones.

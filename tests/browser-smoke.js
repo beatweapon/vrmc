@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
-import {readFile, mkdir} from 'node:fs/promises';
+import {readFile, writeFile, mkdir} from 'node:fs/promises';
 import {chromium} from 'playwright';
 import {serve} from '../scripts/serve.js';
 
@@ -18,6 +18,10 @@ try {
   const viewerSource=await readFile(new URL('../docs/fullbody/viewer.js',import.meta.url),'utf8');
   await context.route('**/fullbody/viewer.js',route=>route.fulfill({contentType:'text/javascript',
     body:viewerSource.replace('this.stage = stage;', 'this.stage = stage; globalThis.testViewer = this;')}));
+  const appSource=await readFile(new URL('../docs/fullbody/app.js',import.meta.url),'utf8');
+  await context.route('**/fullbody/app.js',route=>route.fulfill({contentType:'text/javascript',
+    body:appSource.replace('const trackingState = new TrackingState();',
+      'const trackingState = new TrackingState(); globalThis.testTrackingState = trackingState;')}));
   // Inference itself is exercised with real models by tracker-browser.js. Here
   // controlled detector output makes blink/calibration UI flows reproducible.
   await context.route('**/fullbody/tracker.js',route=>route.fulfill({contentType:'text/javascript',body:`
@@ -470,7 +474,19 @@ try {
   }
   for(const [side,duplicate] of [['right',false],['left',false],['right',true],['left',true]]) {
     await page.evaluate(([side,duplicate])=>raiseOneHand(side,duplicate),[side,duplicate]);
-    await page.waitForFunction(oneRaisedHand,side,{timeout:10000});
+    try { await page.waitForFunction(oneRaisedHand,side,{timeout:10000}); }
+    catch(error) {
+      const details=await page.evaluate(()=>{
+        const avatar=testViewer.avatar;
+        const height=name=>{const node=avatar.vrm.humanoid.getRawBoneNode(name);return node.getWorldPosition(node.position.clone()).y;};
+        return {targets:Object.fromEntries([...avatar.rig.lastArmTargets].map(([side,state])=>[side,{source:state.source,id:state.physicalId}])),
+          hands:Object.keys(avatar.solution.hands),anchors:Object.keys(avatar.solution.armTargets),
+          pending:testTrackingState.frame.hands,tracks:Object.fromEntries(Object.entries(testTrackingState.tracks).map(([side,state])=>[side,
+            {id:state.id,seenAt:state.seenAt,confirmed:state.confirmed,acquisition:state.acquisition,conflict:state.identityConflict}])),
+          heights:['chest','leftHand','rightHand'].map(name=>[name,height(name)])};
+      });
+      throw new Error(`Single-hand acquisition ${side}, duplicate=${duplicate}: ${JSON.stringify(details)}`,{cause:error});
+    }
   }
   // With a fixed detector observation, mirror only the motion onto the other
   // authored arm. No negative model scale or canvas reflection is permitted.
@@ -528,6 +544,89 @@ try {
     }
   }
   await page.evaluate(()=>{testPose=null;testHands=structuredClone(bothHands);});
+  await page.waitForFunction(handsBesideFace,null,{timeout:10000});
+
+  // Continuous motion through the real app, normalized/raw rig and authored
+  // VRM constraints. Save six rendered poses for reviewing the elbow arc.
+  const motion = await page.evaluate(async()=>{
+    testInterval=250; testLatency=.22;
+    // Change from the preceding face close-up to a wider, metrically consistent
+    // field of view. In that close-up, the bottom of the image is still above
+    // the avatar's chest, so moving y alone cannot exercise a lowering arm.
+    const avatar=testViewer.avatar, aspect=4/3, metresPerHeight=.9;
+    const head=avatar.rig.bones.head;
+    const eyes=avatar.rig.eyeOffsets.map(offset=>head.localToWorld(offset.clone()));
+    const eyeY=(eyes[0].y+eyes[1].y)/2;
+    const shoulderY=avatar.rig.bones.leftUpperArm.getWorldPosition(head.position.clone()).y;
+    const shoulderImageY=.35+(eyeY-shoulderY)/metresPerHeight;
+    const span=avatar.rig.shoulderWidth/metresPerHeight;
+    const world=Array.from({length:33},()=>({x:0,y:0,z:0,visibility:0}));
+    const landmarks=Array.from({length:33},()=>({x:.5,y:.5,z:0,visibility:0}));
+    for(const [index,sign] of [[11,1],[12,-1]]) {
+      world[index]={x:sign*.2,y:-.5,z:0,visibility:1};
+      landmarks[index]={x:.5+sign*span/(2*aspect),y:shoulderImageY,z:0,visibility:1};
+    }
+    testPose={worldLandmarks:[world],landmarks:[landmarks]};
+    const started=performance.now();
+    const contact=document.createElement('canvas'); contact.width=1200; contact.height=1200;
+    const ctx=contact.getContext('2d'); ctx.fillStyle='#202b32'; ctx.fillRect(0,0,1200,1200);
+    const traces=[],poses=[]; let previous=null, tiles=0;
+    testBeforeDetectorTick=()=>{
+      const phase=Math.min(1,(performance.now()-started)/8000);
+      const rise=Math.sin(phase*Math.PI)**2;
+      testHands=structuredClone(bothHands);
+      testHands.landmarks.forEach((points,index)=>{
+        const x=(index===0?.70:.30)+(index===0?-1:1)*.12*rise;
+        const y=.97-.60*rise, dx=x-points[0].x, dy=y-points[0].y;
+        points.forEach(point=>{point.x+=dx;point.y+=dy;});
+      });
+    };
+    await new Promise(resolve=>{
+      const sample=now=>{
+        // Use the same RAF timestamp as app.animate. Measuring performance.now
+        // after GPU rendering makes render workload look like a velocity jump.
+        const elapsed=(now-started)/1000;
+        const avatar=testViewer.avatar, rig=avatar.vrm.humanoid;
+        const p=name=>{const node=rig.getRawBoneNode(name);return node.getWorldPosition(node.position.clone());};
+        const values=['left','right'].map(side=>({shoulder:p(side+'UpperArm'),elbow:p(side+'LowerArm'),wrist:p(side+'Hand')}));
+        if(previous && elapsed>1) for(let j=0;j<2;j++) {
+          const arm=values[j];
+          traces.push({dt:(now-previous.time)/1000, step:arm.elbow.distanceTo(previous.values[j].elbow),
+            upper:arm.shoulder.distanceTo(arm.elbow),lower:arm.elbow.distanceTo(arm.wrist),height:arm.wrist.y});
+        }
+        previous={time:now,values};
+        if(tiles<6 && elapsed>=1+tiles*1.4){
+          testViewer.renderer.render(testViewer.scene,testViewer.camera);
+          poses.push(Object.fromEntries(['hips','head','leftUpperLeg','leftLowerLeg','leftFoot','rightFoot']
+            .map(name=>[name,p(name).toArray()])));
+          const x=(tiles%3)*400,y=Math.floor(tiles/3)*600;
+          const canvas=testViewer.renderer.domElement;
+          const width=600*canvas.width/canvas.height;
+          ctx.save();ctx.beginPath();ctx.rect(x,y,400,600);ctx.clip();
+          ctx.drawImage(canvas,x+(400-width)/2,y,width,600);ctx.restore();
+          ctx.fillStyle='#ffffff';ctx.font='18px sans-serif';ctx.fillText(elapsed.toFixed(1)+' s / 4 fps',x+12,y+28);
+          tiles++;
+        }
+        if(elapsed>=10){resolve();return;}
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    testBeforeDetectorTick=null;testInterval=40;testLatency=0;testHands=structuredClone(bothHands);testPose=null;
+    return {traces,poses,image:contact.toDataURL('image/png')};
+  });
+  await writeFile('test-results/fullbody-motion.png',Buffer.from(motion.image.split(',')[1],'base64'));
+  await writeFile('test-results/fullbody-motion.json',JSON.stringify(motion.traces));
+  await writeFile('test-results/fullbody-motion-poses.json',JSON.stringify(motion.poses));
+  assert.ok(motion.poses.every(pose=>Object.values(pose).flat().every(Number.isFinite)), 'all body bones must remain finite during arm motion');
+  assert.ok(motion.traces.length>40,'continuous motion must be sampled during rendering');
+  for(const arm of motion.traces) {
+    assert.ok(Number.isFinite(arm.step)&&arm.step/arm.dt<3,`raw elbow jumped during raising: ${JSON.stringify(arm)}`);
+    assert.ok(Math.abs(arm.upper-motion.traces[0].upper)<1e-5,'upper arm length changed during motion');
+    assert.ok(Math.abs(arm.lower-motion.traces[0].lower)<1e-5,'forearm length changed during motion');
+  }
+  const heightRange=Math.max(...motion.traces.map(v=>v.height))-Math.min(...motion.traces.map(v=>v.height));
+  assert.ok(heightRange>.2,`arms must actually raise and lower: ${heightRange} m`);
   await page.waitForFunction(handsBesideFace,null,{timeout:10000});
 
   await page.locator('#freeze').click();

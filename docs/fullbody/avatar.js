@@ -5,6 +5,7 @@ import {
   BodyRetargeter, TRACKED_BONES, calibrateBody, rootOffset, smoothingAlpha, solveBody, validateBodyCalibration,
 } from './body.js';
 import { mirrorBodyInput, mirrorFaceMotion } from './mirror-motion.js';
+import { dampVector } from './motion.js';
 
 const EXPRESSION_NAMES = ['blink', 'blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh', 'happy', 'angry', 'sad', 'relaxed', 'surprised'];
 const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
@@ -48,6 +49,7 @@ export class FullBodyAvatar {
     this.rig = new BodyRetargeter(bones);
     this.hipsPosition = bones.hips?.position.clone();
     this.root = new Vector3();
+    this.rootVelocity = new Vector3();
     this.rootTarget = new Vector3();
     this.rootTime = -Infinity;
     this.calibration = null;
@@ -75,6 +77,7 @@ export class FullBodyAvatar {
   setCalibration(calibration) {
     this.calibration = validateBodyCalibration(calibration) ? { ...calibration } : null;
     this.root.set(0, 0, 0);
+    this.rootVelocity?.set(0, 0, 0);
     this.rootTarget.set(0, 0, 0);
     this.rootTime = -Infinity;
   }
@@ -101,6 +104,7 @@ export class FullBodyAvatar {
       const input = mirrored ? mirrorBodyInput(pose, frame.hands, frame.faceLandmarks)
         : { pose, hands: frame.hands, faceLandmarks: frame.faceLandmarks };
       this.solution = solveBody(input.pose, input.hands, settings, input.faceLandmarks);
+      this.solution.captureTime = frame.captureTime ?? frame.sampleTime ?? sampleTime;
       this.solutionSequence = sequence;
       this.solveSettings = solveSettings;
     }
@@ -124,7 +128,8 @@ export class FullBodyAvatar {
     }
     if (settings.rootMotion === false || now - this.rootTime > 0.4) this.rootTarget.set(0, 0, 0);
     if (settings.seated) this.rootTarget.y = 0;
-    this.root.lerp(this.rootTarget, smoothingAlpha(dt, settings.bodySmoothing ?? 0.12));
+    this.rootVelocity ??= new Vector3();
+    dampVector(this.root, this.rootVelocity, this.rootTarget, dt, this.rig.response ?? settings.bodySmoothing ?? 0.12);
     hips.position.copy(this.hipsPosition);
     // Convert world-space translation to the hips parent's local axes (also handles VRM 0).
     const world = hips.parent.localToWorld(this.hipsPosition.clone()).add(this.root);

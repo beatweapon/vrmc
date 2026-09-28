@@ -207,10 +207,9 @@ export class TrackingState {
       const stalled = time - previousCaptureTime > 2;
       if (time - track.seenAt > this.identityTtl && (missedSample || stalled)) this.tracks[side] = newHandTrack();
       else if (missedSample) {
-        // A newly visible palm can be the other hand entering the same patch of
-        // the image. Keep physical/filter history, but re-confirm its identity
-        // before reusing the previous arm's target.
-        track.confirmed = false;
+        // Defer the decision until evidence is associated below. A short
+        // detector miss is not by itself a change of physical hand identity.
+        track.reacquiring = true;
         track.acquisition = null;
         track.identityConflict = null;
       }
@@ -264,6 +263,14 @@ export class TrackingState {
     for (const [side, observation] of temporalAssignment) {
       const label = observation.category.label;
       const track = this.tracks[side];
+      if (track.reacquiring) {
+        const agrees = label === side && observation.category.confidence >= 0.9 &&
+          (!observation.poseSide || observation.poseSide === side);
+        const nearby = track.wrist && imageDistanceSquared(track.wrist, observation.points[0]) < 0.0064;
+        const continuous = time - track.seenAt <= 0.65 && agrees && (observation.poseSide === side || nearby);
+        if (!continuous) track.confirmed = false;
+        track.reacquiring = false;
+      }
       if (!track.confirmed) {
         observation.confirmedSide = observation.evidenceSide;
         continue;

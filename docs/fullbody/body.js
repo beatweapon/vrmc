@@ -1,5 +1,6 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
-import { solveTwoBoneIK } from './arm-ik.js';
+import { ArmMotion } from './arm-ik.js';
+import { MotionState, dampQuaternion, dampVector } from './motion.js';
 import { measureHand, HandRetargeter, constrainWristRotation, WRIST_LIMITS, principalAngle, forearmRollTarget } from './hand-rig.js';
 
 const IDENTITY = new Quaternion();
@@ -153,7 +154,7 @@ function imageAnchors(pose, face, threshold) {
 export function solveBody(pose, hands, settings = {}, faceLandmarks = null) {
   const threshold = settings.minVisibility ?? 0.55;
   const points = pose?.worldLandmarks?.[0];
-  const result = { hips: null, torso: null, directions: {}, palms: {}, hands:{}, armTargets: {},
+  const result = { hips: null, torso: null, directions: {}, palms: {}, hands:{}, armTargets: {}, poseArmTargets: {},
     releasedSides: (hands?.releasedSides ?? []).filter(side => side === 'left' || side === 'right'), tracked: false, legTracked: false };
   if (poseVisible(pose, [11, 12, 23, 24], threshold)) {
     const up = midpoint(points, 11, 12).sub(midpoint(points, 23, 24));
@@ -193,8 +194,23 @@ export function solveBody(pose, hands, settings = {}, faceLandmarks = null) {
     }
   }
   result.legTracked = !settings.seated && poseVisible(pose, [23, 24, 25, 26, 27, 28], threshold);
+  // A visible Pose wrist is sufficient even when the elbow is cropped. Use
+  // the same image-to-avatar mapping as Hand, rather than waiting for its ROI.
+  // Keep the established identity gate: uncertain hands must not raise a new
+  // arm through a contradictory Pose label.
+  const anchors = imageAnchors(pose, faceLandmarks, threshold);
+  for (const [side, wristIndex] of [['left', 15], ['right', 16]]) {
+    if (settings.trackHands !== false && hands?.pendingSides?.includes(side)) continue;
+    if (!poseVisible(pose, [11, 12, wristIndex], Math.max(0, threshold - 0.1))) continue;
+    const wrist = pose.landmarks?.[0]?.[wristIndex];
+    if (!wrist) continue;
+    const span = landmarkVector(points[11]).distanceTo(landmarkVector(points[12]));
+    result.poseArmTargets[side] = { ...anchors, wrist: { x: wrist.x, y: wrist.y },
+      acquire: poseVisible(pose, [11, 12, wristIndex], threshold),
+      depthRatio: clamp((landmarkVector(points[wristIndex]).z - midpoint(points, 11, 12).z) / Math.max(.1, span), -1.5, 1.5),
+      elbowDirection: result.directions[`${side}UpperArm`]?.clone() ?? null };
+  }
   if (settings.trackHands !== false) {
-    const anchors = imageAnchors(pose, faceLandmarks, threshold);
     for (const [side, { world: hand, image, physicalId }] of assignHands(hands, pose, threshold)) {
       if (!visible(hand, [0, 5, 9, 17], 0)) continue;
       const wristIndex=side==='left'?15:16;
@@ -299,6 +315,8 @@ export class BodyRetargeter {
     this.releasedArmTimes = new Map();
     this.wristRotations = new Map();
     this.imageReference = {};
+    this.motion = new MotionState();
+    this.sampleInterval = 1 / 30;
     this.handRig = new HandRetargeter(bones);
     for (const [name, bone] of Object.entries(bones)) {
       if (!bone) continue;
@@ -359,7 +377,7 @@ export class BodyRetargeter {
     this.applyLocal(name, local, sampleTime, now, dt, settings, forceRest);
   }
 
-  applyLocal(name, desiredLocal, sampleTime, now, dt, settings = {}, forceRest = false) {
+  applyLocal(name, desiredLocal, sampleTime, now, dt, settings = {}, forceRest = false, direct = false) {
     const bone = this.bones[name];
     const rest = this.rest[name];
     if (!bone || !rest) return;
@@ -373,12 +391,24 @@ export class BodyRetargeter {
     const side = name.startsWith('left') ? 'left' : 'right';
     const correctedArm = /UpperArm|LowerArm|Hand|Thumb|Index|Middle|Ring|Little/.test(name)
       && now - (this.releasedArmTimes.get(side) ?? -Infinity) < 0.3;
-    bone.quaternion.slerp(target, smoothingAlpha(dt, holding ? (settings.bodySmoothing ?? 0.12) : correctedArm ? 0.06 : 0.45));
+    if (direct && holding) bone.quaternion.copy(target);
+    else this.motion.rotation(name, bone.quaternion, target, dt,
+      holding ? this.response ?? settings.bodySmoothing ?? 0.12 : correctedArm ? 0.06 : 0.45);
     bone.updateWorldMatrix(false, false);
     if (forceRest) this.last.delete(name);
   }
 
   update(solution, sampleTime, now, dt, settings = {}, face = undefined) {
+    const captureTime = solution.captureTime ?? sampleTime;
+    if (captureTime > (this.previousSampleTime ?? -Infinity)) {
+      const interval = captureTime - this.previousSampleTime;
+      if (interval > 0 && interval < 0.8) this.sampleInterval += (interval - this.sampleInterval) * 0.25;
+      else if (interval >= 0.8) this.sampleInterval = 1 / 30;
+      this.previousSampleTime = captureTime;
+    }
+    // One response policy across independent body constraints. Slow inference
+    // needs a longer response to bridge observations; never extrapolate a hand.
+    this.response = Math.max(settings.bodySmoothing ?? 0.12, Math.min(0.3, this.sampleInterval * 1.1));
     // Remove last render's distributed roll before solving the arm again.
     // Its bind-based direction solution and smoothing must never feed that
     // additional roll back into themselves and accumulate complete turns.
@@ -415,13 +445,8 @@ export class BodyRetargeter {
     if (face !== undefined) this.updateHead(face, sampleTime, now, dt, settings);
     const fallbackArms = new Set();
     for (const side of ['left', 'right']) {
-      if (settings.trackHands === false) {
-        this.lastArmTargets.delete(side);
-      } else if (!solution.armTargets?.[side] && solution.directions[`${side}UpperArm`] && solution.directions[`${side}LowerArm`]) {
-        // A visible lowering arm is new evidence, not a hand-detector dropout
-        // to hold in its previous raised IK pose.
-        this.lastArmTargets.delete(side);
-      } else if (this.updateArmTarget(side, solution.armTargets?.[side], sampleTime, now, dt, settings)) {
+      if (this.updateArmTarget(side, settings.trackHands === false ? null : solution.armTargets?.[side],
+        sampleTime, now, dt, settings, solution.directions, solution.poseArmTargets?.[side])) {
         fallbackArms.add(side);
       }
     }
@@ -462,6 +487,7 @@ export class BodyRetargeter {
       lower.updateWorldMatrix(false, true);
     }
     this.wristRotations.delete(side);
+    this.motion.clearSide(side);
     this.lastArmTargets.delete(side);
     for (const name of this.last.keys()) {
       if (name.startsWith(side) && /UpperArm|LowerArm|Hand|Thumb|Index|Middle|Ring|Little/.test(name)) this.last.delete(name);
@@ -482,7 +508,8 @@ export class BodyRetargeter {
     }
     let state = this.wristRotations.get(side);
     const fresh = settings.trackHands !== false && desiredWorld && now - sampleTime >= -0.1 && now - sampleTime < 0.4;
-    if (!state) state = { appliedTwist: 0, measuredTwist: 0, upperTwist: 0, upperRollPhase: 0, time: -Infinity };
+    if (!state) state = { appliedTwist: 0, measuredTwist: 0, upperTwist: 0, upperRollPhase: 0, time: -Infinity,
+      orientation: wrist.getWorldQuaternion(new Quaternion()), velocity: new Vector3() };
     if (fresh) {
       if (sampleTime - state.time > 0.4) {
         state.measuredTwist = 0;
@@ -496,7 +523,9 @@ export class BodyRetargeter {
     const parent = wrist.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY;
     const neutral = parent.clone().multiply(rest.local);
     const axis = axisWorld.clone().applyQuaternion(neutral.clone().invert());
-    const delta = holding ? neutral.clone().invert().multiply(state.desiredWorld) : null;
+    dampQuaternion(state.orientation, state.velocity, holding ? state.desiredWorld : neutral, dt,
+      holding ? this.response : 0.45);
+    const delta = holding ? neutral.clone().invert().multiply(state.orientation) : null;
     // The bind-derived forearm orientation has no anatomical zero. Preserve
     // observed axial roll while still rejecting extreme wrist swing. Only the
     // wrist's relative axial rotation is an anatomical/deformation safeguard.
@@ -504,22 +533,35 @@ export class BodyRetargeter {
     if (limited) state.measuredTwist = principalAngle(limited.measuredTwist);
     const forearmTarget = limited ? forearmRollTarget(limited.measuredTwist) : 0;
     const rollStep = principalAngle(forearmTarget - state.appliedTwist);
-    state.appliedTwist = principalAngle(state.appliedTwist + rollStep * smoothingAlpha(dt, holding ? settings.bodySmoothing ?? 0.12 : 0.45));
+    if (holding) {
+      state.appliedTwist = principalAngle(state.appliedTwist + rollStep);
+      state.releaseVelocity = new Vector3();
+    } else {
+      // Loss is a transition, not an immediate removal of distributed roll.
+      // Live palms are filtered once above; only unobserved roll relaxes here.
+      const releasing = new Vector3(state.appliedTwist, state.upperTwist, 0);
+      state.releaseVelocity ??= new Vector3();
+      dampVector(releasing, state.releaseVelocity, new Vector3(), dt, 0.45);
+      state.appliedTwist = releasing.x;
+      state.upperTwist = releasing.y;
+    }
     state.baseLocal = lower.quaternion.clone();
     // Rotating around elbow -> wrist leaves both IK joint positions unchanged.
     const world = new Quaternion().setFromAxisAngle(axisWorld, state.appliedTwist)
       .multiply(lower.getWorldQuaternion(new Quaternion()));
     if (upper) {
-      // Keep the shoulder-to-elbow and elbow-to-wrist positions fixed while
-      // spreading the roll across both long arm bones. Compensating the lower
-      // bone's local quaternion below preserves its absolute target. This keeps
-      // a half-turn from merely moving the wrist pinch to the elbow seam.
+      // Share roll only while the arm is nearly extended. With a bent elbow,
+      // forearm pronation must not turn the upper arm as if it shared that axis.
+      // Lower-arm compensation below preserves the observed world palm.
       if (holding) state.upperRollPhase += principalAngle(state.appliedTwist - state.upperRollPhase);
       else state.upperRollPhase = state.appliedTwist;
-      const upperTarget = holding ? clamp(state.upperRollPhase * 0.5, -WRIST_LIMITS.upperArmTwist, WRIST_LIMITS.upperArmTwist) : 0;
-      state.upperTwist += (upperTarget - state.upperTwist) * smoothingAlpha(dt, holding ? settings.bodySmoothing ?? 0.12 : 0.45);
-      state.upperBaseLocal = upper.quaternion.clone();
       const upperAxis = lower.getWorldPosition(new Vector3()).sub(upper.getWorldPosition(new Vector3())).normalize();
+      const alignment = clamp((upperAxis.dot(axisWorld) - Math.cos(70 * Math.PI / 180)) /
+        (Math.cos(20 * Math.PI / 180) - Math.cos(70 * Math.PI / 180)), 0, 1);
+      const sharing = alignment * alignment * (3 - 2 * alignment);
+      const upperTarget = holding ? clamp(state.upperRollPhase * 0.5 * sharing, -WRIST_LIMITS.upperArmTwist, WRIST_LIMITS.upperArmTwist) : 0;
+      if (holding) state.upperTwist = upperTarget;
+      state.upperBaseLocal = upper.quaternion.clone();
       const upperWorld = new Quaternion().setFromAxisAngle(upperAxis, state.upperTwist).multiply(upper.getWorldQuaternion(new Quaternion()));
       upper.quaternion.copy(worldToLocalQuaternion(upper.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY, upperWorld));
       upper.updateWorldMatrix(false, true);
@@ -530,13 +572,13 @@ export class BodyRetargeter {
     if (limited) {
       const desired = neutral.clone().multiply(limited.rotation);
       local = worldToLocalQuaternion(wrist.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY, desired);
-      // The forearm is smoothed independently. Until it catches up, cap the
-      // residual at the wrist instead of briefly putting all of the roll here.
+      // Cap the remaining local wrist roll after distributing the filtered
+      // palm orientation; do not concentrate the forearm turn at this joint.
       const relative = rest.local.clone().invert().multiply(local);
       const constrained = constrainWristRotation(relative, axis, 0, WRIST_LIMITS.wristTwist);
       local = constrained && rest.local.clone().multiply(constrained.rotation);
     }
-    this.applyLocal(name, local, state.time, now, dt, settings, settings.trackHands === false);
+    this.applyLocal(name, local, state.time, now, dt, settings, settings.trackHands === false, true);
     // Bound the rendered joint too: a changing forearm axis or a previous
     // tracking pose cannot escape the limits during quaternion interpolation.
     const rendered = constrainWristRotation(rest.local.clone().invert().multiply(wrist.quaternion), axis, 0, WRIST_LIMITS.wristTwist);
@@ -571,18 +613,8 @@ export class BodyRetargeter {
       scale ??= this.eyeWidth * (anchors.face.foreshorten ?? 1) / anchors.face.span;
     }
     if (!origin || !Number.isFinite(scale) || scale <= 0) return null;
-    // Scale comes from fixed avatar proportions and OBSERVED foreshortening,
-    // never from the animated avatar. The latter feeds head/body lag back into
-    // wrist placement and makes a stationary hand sway indefinitely.
-    if (remember) {
-      if (reference.scaleTime !== sampleTime) {
-        const elapsed = sampleTime - (reference.scaleTime ?? -Infinity);
-        reference.scale = elapsed > 0.8 ? scale : reference.scale +
-          (scale - reference.scale) * smoothingAlpha(elapsed, 0.18);
-        reference.scaleTime = sampleTime;
-      }
-      scale = reference.scale;
-    }
+    // Fixed bind dimensions and observed foreshortening define scale. Wrist
+    // placement has one render-time filter in ArmMotion, no extra scale EMA.
     const target = origin.add(new Vector3(
       (anchor.wrist.x - imageOrigin.x) * anchor.aspect * scale,
       -(anchor.wrist.y - imageOrigin.y) * scale,
@@ -594,7 +626,7 @@ export class BodyRetargeter {
     return target;
   }
 
-  updateArmTarget(side, anchor, sampleTime, now, dt, settings) {
+  updateArmTarget(side, anchor, sampleTime, now, dt, settings, directions = {}, poseAnchor = null) {
     const upperName = side + 'UpperArm';
     const lowerName = side + 'LowerArm';
     const upper = this.bones[upperName];
@@ -606,36 +638,66 @@ export class BodyRetargeter {
     const wrist = hand.getWorldPosition(new Vector3());
     const upperLength = shoulder.distanceTo(elbow);
     const lowerLength = elbow.distanceTo(wrist);
-    const reach = upperLength + lowerLength - Math.min(upperLength, lowerLength) * 0.001;
     const fresh = now - sampleTime >= -0.1 && now - sampleTime < 0.4;
-    const defaultBend = new Vector3(side === 'left' ? 0.45 : -0.45, -1, 0.15).normalize();
+    const torsoName = ['upperChest', 'chest', 'spine', 'hips'].find(name => this.bones[name]);
+    const torsoRotation = torsoName ? this.bones[torsoName].getWorldQuaternion(new Quaternion())
+      .multiply(this.rest[torsoName].world.clone().invert()) : new Quaternion();
+    const inverse = torsoRotation.clone().invert();
+    const other = this.bones[(side === 'left' ? 'right' : 'left') + 'UpperArm'];
+    const origin = other ? other.getWorldPosition(new Vector3()).add(shoulder).multiplyScalar(0.5) : shoulder.clone();
+    const localShoulder = shoulder.clone().sub(origin).applyQuaternion(inverse);
     let recent = this.lastArmTargets.get(side);
-    if (anchor && fresh) {
-      const target = this.imageWristTarget(anchor, sampleTime);
+    if (fresh) {
+      const handTarget = anchor && this.imageWristTarget(anchor, sampleTime);
+      const poseAccepted = poseAnchor && (poseAnchor.acquire || sampleTime - (recent?.poseTime ?? -Infinity) <= 0.4);
+      let poseTarget = poseAccepted && this.imageWristTarget(poseAnchor, sampleTime);
+      const upperDirection = directions[upperName], lowerDirection = directions[lowerName];
+      // Pose and Hand feed the same constraint/state. A detector dropout must
+      // not switch between independently smoothed FK and IK bone rotations.
+      const completePose = upperDirection && lowerDirection;
+      if (completePose) {
+        poseTarget = shoulder.clone().addScaledVector(upperDirection, upperLength).addScaledVector(lowerDirection, lowerLength);
+      }
+      let target = handTarget || poseTarget;
+      const measured = upperDirection ?? anchor?.elbowDirection ?? poseAnchor?.elbowDirection;
       if (target) {
         if (!recent || now - recent.time > 0.4) {
-          recent = { offset: wrist.clone().sub(shoulder), bendHint: defaultBend.clone(), time: sampleTime, elbowTime: -Infinity };
+          recent = { motion: new ArmMotion(wrist.clone().sub(shoulder).applyQuaternion(inverse)) };
         }
-        const offset = target.sub(shoulder);
-        // Depth from one camera is less certain than the visible x/y. Fit z
-        // into the remaining reach so noisy depth cannot pull the hand down
-        // or sideways through a uniform 3D reach clamp.
-        const depthReach = Math.sqrt(Math.max(0, reach * reach - offset.x * offset.x - offset.y * offset.y));
-        offset.z = clamp(offset.z, -depthReach, depthReach);
-        recent.offset.lerp(offset, smoothingAlpha(dt, settings.bodySmoothing ?? 0.12));
+        const localTarget = (value, imageBased) => {
+          const offset = value.clone().sub(shoulder);
+          if (imageBased) {
+            // Weak monocular depth must be limited in CAMERA axes before moving
+            // into the torso frame; torso yaw must not change image x/y priority.
+            const reach = upperLength + lowerLength;
+            const depthReach = Math.sqrt(Math.max(0, reach * reach - offset.x ** 2 - offset.y ** 2));
+            offset.z = clamp(offset.z, -depthReach, depthReach);
+          }
+          return offset.applyQuaternion(inverse);
+        };
+        const source = handTarget ? 'hand' : 'pose';
+        const mode = source === 'hand' ? 'hand' : completePose ? 'pose' : 'pose-image';
+        const candidates = { hand: handTarget && localTarget(handTarget, true),
+          pose: poseTarget && localTarget(poseTarget, !completePose) };
+        if (recent.mode && recent.mode !== mode) {
+          recent.handover = { from: recent.target.clone(), start: now, duration: this.response };
+        }
+        target = candidates[source];
+        if (recent.handover) {
+          const blend = clamp((now - recent.handover.start + dt) / recent.handover.duration, 0, 1);
+          target = recent.handover.from.clone().lerp(target, blend * blend * (3 - 2 * blend));
+          if (blend === 1) recent.handover = null;
+        }
+        recent.target = target;
+        if (measured) {
+          recent.measured = measured.clone().applyQuaternion(inverse);
+          recent.measuredTime = sampleTime;
+        } else if (sampleTime - (recent.measuredTime ?? -Infinity) > 0.4) recent.measured = null;
+        if (poseTarget) recent.poseTime = sampleTime;
         recent.time = sampleTime;
-        recent.physicalId = anchor.physicalId;
-        // The observed elbow chooses the bend plane, not a second wrist target.
-        // Near a straight arm its plane is ambiguous: retain the previous plane.
-        const axis = recent.offset.clone().normalize();
-        const measured = anchor.elbowDirection?.clone();
-        if (measured) measured.addScaledVector(axis, -measured.dot(axis));
-        if (measured?.lengthSq() > 0.035) {
-          recent.elbowTarget = measured.normalize();
-          recent.elbowTime = sampleTime;
-        }
-        const hint = now - recent.elbowTime < 0.6 ? recent.elbowTarget : defaultBend;
-        recent.bendHint.lerp(hint, smoothingAlpha(dt, 0.2));
+        recent.physicalId = anchor?.physicalId ?? recent.physicalId;
+        recent.source = source;
+        recent.mode = mode;
         this.lastArmTargets.set(side, recent);
       }
     }
@@ -643,9 +705,12 @@ export class BodyRetargeter {
       this.lastArmTargets.delete(side);
       return false;
     }
-    const solved = solveTwoBoneIK(shoulder, shoulder.clone().add(recent.offset),
-      upperLength, lowerLength, recent.bendHint);
+    const solved = recent.motion.update({ shoulder: localShoulder, target: localShoulder.clone().add(recent.target),
+      measuredElbow: recent.measured, side, upperLength, lowerLength, width: this.shoulderWidth,
+      height: this.torsoLength, dt, response: this.response });
     if (!solved) return false;
+    solved.elbow.applyQuaternion(torsoRotation).add(origin);
+    solved.wrist.applyQuaternion(torsoRotation).add(origin);
     // Smooth the wrist once, satisfy segment lengths exactly, and use fixed
     // bind axes. Incremental rotations against last render accumulate roll.
     for (const [name, target] of [[upperName, solved.elbow], [lowerName, solved.wrist]]) {

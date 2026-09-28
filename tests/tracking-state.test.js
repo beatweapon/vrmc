@@ -151,12 +151,13 @@ test('a wrist position spike does not teleport the hand or assign it to a new ar
   assert.equal(wristBySide(recovered, 'Left').x, 0.2);
 });
 
-test('absent hands are absent immediately while re-confirmation preserves short-occlusion history', () => {
+test('a short consistent hand dropout resumes its identity; a long absence requires confirmation', () => {
   const state = new TrackingState();
   const first = prime(state, hands(hand(0.7, 'Left')));
   assert.equal(state.update({ time: 0.1, hands: hands() }).hands.landmarks.length, 0);
-  const pending = state.update({ time: 0.2, hands: hands(hand(0.7, 'Left')) });
-  assert.deepEqual(pending.hands.trackingIds, []);
+  const resumed = state.update({ time: 0.2, hands: hands(hand(0.7, 'Left')) });
+  assert.deepEqual(resumed.hands.trackingIds, ['Left']);
+  assert.deepEqual(resumed.hands.physicalTrackingIds, first.hands.physicalTrackingIds);
   const briefReturn = state.update({ time: 0.3, hands: hands(hand(0.7, 'Left')) });
   assert.deepEqual(briefReturn.hands.trackingIds, ['Left']);
   assert.deepEqual(briefReturn.hands.physicalTrackingIds, first.hands.physicalTrackingIds);
