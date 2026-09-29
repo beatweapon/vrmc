@@ -160,10 +160,18 @@ export class FullBodyAvatar {
     const motion = this.bodyMotion[name];
     if (!motion) return null;
     const holding = now - motion.lastSeen < .4;
-    const base = Math.max(.045, Math.min(.16, (settings.bodySmoothing ?? .12) * .65));
-    const cadence = Math.min(.18, .65 * (motion.interval ?? 0));
-    motion.liveResponse = Math.max(base, cadence);
     const target = holding ? motion.target : new Quaternion();
+    if (holding) {
+      const angle = motion.rotation.angleTo(target);
+      const quietAngle = (name === 'torso' ? 1.5 : 1.2) * Math.PI / 180;
+      const responsiveAngle = (name === 'torso' ? 8 : 7) * Math.PI / 180;
+      const t = Math.max(0, Math.min(1, (angle - quietAngle) / Math.max(1e-6, responsiveAngle - quietAngle)));
+      const activity = t * t * (3 - 2 * t);
+      const cadenceResponse = Math.max(.055, Math.min(.09, .5 * (motion.interval ?? 0)));
+      const quietResponse = Math.max(name === 'torso' ? .16 : .145,
+        Math.min(.2, (settings.bodySmoothing ?? .12) * 1.25));
+      motion.liveResponse = quietResponse + (cadenceResponse - quietResponse) * activity;
+    }
     dampQuaternion(motion.rotation, motion.velocity, target, dt, holding ? motion.liveResponse : .35);
     return motion.rotation.clone();
   }
