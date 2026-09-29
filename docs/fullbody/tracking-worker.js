@@ -73,6 +73,41 @@ async function initialize({ delegate, quality }) {
   self.postMessage({ type: 'ready', delegate });
 }
 
+function gatePoseHandLandmarks(pose, hands, enabled) {
+  if (!enabled) return;
+  const imagePose = pose.landmarks?.[0];
+  const handWrists = (hands?.landmarks ?? []).map(points => points?.[0]).filter(Boolean);
+  const aspect = Number.isFinite(pose.imageWidth) && Number.isFinite(pose.imageHeight) && pose.imageHeight > 0
+    ? pose.imageWidth / pose.imageHeight : 1;
+
+  // HandLandmarker owns fingers. Pose wrist 15/16 is kept only when a real
+  // 21-point Hand wrist corroborates it in image space. This preserves main's
+  // arm solver while preventing a sparse Pose-only hand from becoming a target.
+  for (const [image, world] of [[pose.landmarks?.[0], pose.worldLandmarks?.[0]]]) {
+    if (!image && !world) continue;
+    for (const index of [17, 18, 19, 20, 21, 22]) {
+      for (const collection of [image, world]) {
+        const point = collection?.[index];
+        if (!point) continue;
+        point.visibility = 0;
+        point.presence = 0;
+      }
+    }
+    for (const wristIndex of [15, 16]) {
+      const poseWrist = imagePose?.[wristIndex];
+      const corroborated = poseWrist && handWrists.some(wrist =>
+        Math.hypot((wrist.x - poseWrist.x) * aspect, wrist.y - poseWrist.y) < .14);
+      if (corroborated) continue;
+      for (const collection of [image, world]) {
+        const point = collection?.[wristIndex];
+        if (!point) continue;
+        point.visibility = 0;
+        point.presence = 0;
+      }
+    }
+  }
+}
+
 function detect({ bitmap, timestamp, time, trackHands }) {
   let pose;
   try {
@@ -80,13 +115,19 @@ function detect({ bitmap, timestamp, time, trackHands }) {
     if (!Number.isFinite(timestamp)) throw new Error('Invalid capture timestamp.');
     // Defend the VIDEO contract even if the page clock is rounded for privacy.
     lastTimestamp = Math.max(timestamp, lastTimestamp + 1);
+
+    // Run Hand before Pose so it is not additionally delayed by Pose within
+    // this frame. Delivery stays atomic for TrackingState until Hand gets its
+    // own independent capture cadence in a follow-up change.
+    const hands = trackHands ? tasks.hands.detectForVideo(bitmap, lastTimestamp) : null;
     pose = tasks.pose.detectForVideo(bitmap, lastTimestamp);
+    gatePoseHandLandmarks(pose, hands, trackHands);
     const result = {
       // Only clone serializable data; segmentation is deliberately disabled.
       pose: { landmarks: pose.landmarks, worldLandmarks: pose.worldLandmarks },
       time,
     };
-    if (trackHands) result.hands = tasks.hands.detectForVideo(bitmap, lastTimestamp);
+    if (hands) result.hands = hands;
     self.postMessage({ type: 'results', result });
   } catch (error) {
     console.error('MediaPipe inference:', error);
