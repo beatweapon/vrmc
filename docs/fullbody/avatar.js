@@ -9,7 +9,7 @@ import { dampVector } from './motion.js';
 
 const EXPRESSION_NAMES = ['blink', 'blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh', 'happy', 'angry', 'sad', 'relaxed', 'surprised'];
 const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
-const BODY_DEAD_ZONE = Object.freeze({ hips: 1 * Math.PI / 180, torso: 1.5 * Math.PI / 180 });
+const BODY_DEAD_ZONE = Object.freeze({ hips: 2 * Math.PI / 180, torso: 3 * Math.PI / 180 });
 const finiteQuaternion = value => Array.isArray(value) && value.length === 4 && value.every(Number.isFinite);
 const posePoint = point => point && [point.x, point.y, point.z].every(Number.isFinite)
   ? new Vector3(point.x, -point.y, -point.z) : null;
@@ -71,7 +71,6 @@ export class FullBodyAvatar {
       throw new Error('このVRMには表示できるメッシュが含まれていません。');
     }
     this.height = Math.max(0.5, bounds.max.y - bounds.min.y);
-    // Ground the loaded avatar once; root tracking acts on the normalized hips afterwards.
     vrm.scene.position.y -= bounds.min.y;
     vrm.scene.updateWorldMatrix(true, true);
     const bones = Object.fromEntries(TRACKED_BONES.map(name => [name, vrm.humanoid.getNormalizedBoneNode(name)]));
@@ -91,8 +90,6 @@ export class FullBodyAvatar {
     this.floorBones = ['leftFoot', 'rightFoot', 'leftToes', 'rightToes'].filter(name => bones[name]);
     this.floorHeight = this.floorBones.length ? Math.min(...this.floorBones.map(name => bones[name].getWorldPosition(new Vector3()).y)) : 0;
     if (vrm.lookAt) vrm.lookAt.autoUpdate = false;
-    // Keep gaze through blinks for avatars whose eye direction is expression-based.
-    // Some VRMs otherwise suppress lookAt expressions while a blink is active.
     for (const name of ['blink', 'blinkLeft', 'blinkRight']) {
       const expression = vrm.expressionManager?.getExpression(name);
       if (expression) expression.overrideLookAt = 'none';
@@ -142,9 +139,14 @@ export class FullBodyAvatar {
       this.bodyRotationHold[name] = rotation.clone();
       return rotation;
     }
-    if (previous.angleTo(rotation) < BODY_DEAD_ZONE[name]) return previous.clone();
-    previous.copy(rotation);
-    return rotation;
+    const angle = previous.angleTo(rotation);
+    const deadZone = BODY_DEAD_ZONE[name];
+    if (angle <= deadZone) return previous.clone();
+    // A soft deadband removes detector noise without introducing a visible
+    // step when real motion finally exceeds the threshold. Only the angular
+    // amount outside the deadband advances the held target.
+    previous.slerp(rotation, (angle - deadZone) / angle).normalize();
+    return previous.clone();
   }
 
   prepareBodySolution(solution, mirrored) {
@@ -163,9 +165,6 @@ export class FullBodyAvatar {
     const now = performance.now() / 1000;
     const sampleTime = Number.isFinite(frame.time) ? frame.time : -Infinity;
     const dt = Math.max(0, Math.min(0.1, deltaSeconds));
-    // Re-solve when inputs/settings change; freshness is checked independently on every render.
-    // A close-up can contain a face and hands without a Pose result. Preserve
-    // the camera aspect in that case instead of assuming a square image.
     const pose = {...frame.pose, imageWidth:frame.pose?.imageWidth ?? frame.imageWidth,
       imageHeight:frame.pose?.imageHeight ?? frame.imageHeight};
     const sequence = frame.sequence ?? sampleTime;
@@ -199,8 +198,6 @@ export class FullBodyAvatar {
     if (!hips || !this.hipsPosition) return;
     const offset = rootOffset(pose, this.calibration, this.rig.torsoLength, settings);
     if (offset && now - sampleTime < 0.4) {
-      // The calibration remains in the user's coordinates. Reflect only the
-      // resulting lateral motion, not the model's authored rest translation.
       if (settings.mirrorAvatar === true) offset.x *= -1;
       this.rootTarget.copy(offset);
       this.rootTime = sampleTime;
@@ -210,12 +207,9 @@ export class FullBodyAvatar {
     this.rootVelocity ??= new Vector3();
     dampVector(this.root, this.rootVelocity, this.rootTarget, dt, this.rig.response ?? settings.bodySmoothing ?? 0.12);
     hips.position.copy(this.hipsPosition);
-    // Convert world-space translation to the hips parent's local axes (also handles VRM 0).
     const world = hips.parent.localToWorld(this.hipsPosition.clone()).add(this.root);
     hips.position.copy(hips.parent.worldToLocal(world));
     hips.updateWorldMatrix(true, true);
-    // A conservative floor bound prevents knees/crouches from pulling both feet below ground.
-    // This is not foot-lock IK: the lower visible foot may still slide with monocular estimates.
     if (!settings.seated && this.floorBones.length) {
       const lowest = Math.min(...this.floorBones.map(name => this.rig.bones[name].getWorldPosition(new Vector3()).y));
       const correction = Math.max(0, this.floorHeight - lowest);
@@ -253,7 +247,6 @@ export class FullBodyAvatar {
         if (!manager.getExpression(name)) continue;
         const target = holding ? clamp01(expressions[name]) : 0;
         const current = manager.getValue(name) ?? 0;
-        // FaceSolver already smooths live data. Only ease the recovery after detection loss.
         manager.setValue(name, holding ? target : current + (target - current) * smoothingAlpha(dt, 0.25));
       }
     }
