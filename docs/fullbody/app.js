@@ -3,7 +3,7 @@ import {sampleModels, sampleFile} from '../models/catalog.js';
 import {Tracker} from './tracker.js';
 import {FaceSolver, measureFace, calibrateFace} from './face.js';
 import {TrackingState} from './tracking-state.js';
-import {DEFAULTS, sanitizeSettings, loadProfile, saveProfile, modelStore} from './settings.js';
+import {DEFAULTS, sanitizeSettings, loadProfile, saveProfile, modelStore, backgroundStore} from './settings.js';
 
 const $ = id => document.getElementById(id);
 const isOutput = new URLSearchParams(location.search).get('output') === '1' && !!window.opener;
@@ -16,6 +16,7 @@ let frame = {face:null, pose:null, hands:null, time:0};
 let frozen = false;
 let popup;
 let modelFile = null;
+let backgroundFile = null;
 let cameraStream;
 let running = false;
 let starting = false;
@@ -71,7 +72,7 @@ function setSettingsOpen(open) {
 }
 function post(message) { if (popup && !popup.closed) popup.postMessage({vrmc:'fullbody', ...message}, origin); }
 function sendState() {
-  post({type:'state', settings, calibration, frozen, pose:frozen?viewer.getPose():null, view:viewer.getView()});
+  post({type:'state', settings, calibration, backgroundFile, frozen, pose:frozen?viewer.getPose():null, view:viewer.getView()});
 }
 function persist() {
   if (!saveProfile(settings, calibration)) status('このブラウザでは設定を保存できません。現在のセッションではそのまま使えます。');
@@ -88,6 +89,8 @@ function syncSettings() {
     if (key === 'minVisibility') output.textContent = `${Math.round(value*100)}%`;
   });
   $('color-control').hidden = settings.background !== 'color';
+  $('image-control').hidden = settings.background !== 'image';
+  $('background-name').textContent = backgroundFile ? `選択中: ${backgroundFile.name}` : '画像が選択されていません。';
   $('camera-preview').classList.toggle('mirrored', settings.mirrorPreview);
   viewer?.setDisplay(settings);
 }
@@ -399,6 +402,7 @@ function outputMode() {
   let loadSequence = 0;
   let pendingView;
   let pendingPose;
+  let outputBackgroundKey = '';
   window.addEventListener('message', async event => {
     if (event.origin!==origin || event.source!==window.opener || event.data?.vrmc!=='fullbody') return;
     const message = event.data;
@@ -408,7 +412,12 @@ function outputMode() {
       frozen = !!message.frozen;
       pendingPose = message.pose;
       pendingView = message.view;
-      viewer.setDisplay(settings);
+      const file = message.backgroundFile || null;
+      const key = file ? `${file.name}:${file.size}:${file.lastModified}` : '';
+      if (key !== outputBackgroundKey) {
+        outputBackgroundKey = key;
+        await viewer.setBackgroundImage(file, settings);
+      } else viewer.setDisplay(settings);
       viewer.setView(message.view);
       const bodyKey = JSON.stringify(calibration.body || null);
       if (outputMode.bodyKey !== bodyKey) { viewer.avatar?.setCalibration(calibration.body || null); outputMode.bodyKey = bodyKey; }
@@ -455,10 +464,11 @@ function animate(now) {
 }
 
 async function init() {
-  $('build-version').textContent = 'Full Body · 2026.09.29.3';
+  $('build-version').textContent = 'Full Body · 2026.09.30.1';
   try {
     viewer = new Viewer($('stage'), {interactive:!isOutput, onViewChange:view=>post({type:'view',view})});
-    viewer.setDisplay(settings);
+    try { backgroundFile = await backgroundStore(); } catch { /* Background images are optional. */ }
+    await viewer.setBackgroundImage(backgroundFile, settings);
     viewer.renderer.domElement.addEventListener('webglcontextlost', event => { event.preventDefault(); stopCamera(); status('描画用GPUとの接続が失われました。ページを再読み込みしてください。', true); });
     renderHandle = requestAnimationFrame(animate);
     if (isOutput) { outputMode(); return; }
@@ -507,6 +517,30 @@ async function init() {
       finally { $('save').disabled=!viewer.avatar; }
     };
     $('files').onchange = () => { if ($('files').files[0]) loadModel($('files').files[0]); };
+    $('background-file').onchange = async () => {
+      const file = $('background-file').files[0];
+      $('background-file').value = '';
+      if (!file) return;
+      if (!file.type.startsWith('image/')) { status('画像ファイルを選択してください。', true); return; }
+      try {
+        backgroundFile = file;
+        await backgroundStore(file);
+        settings = sanitizeSettings({...settings,background:'image'});
+        await viewer.setBackgroundImage(backgroundFile, settings);
+        syncSettings(); persist(); sendState();
+        status(`背景画像「${file.name}」を設定しました。`);
+      } catch (error) { status(`背景画像を設定できませんでした: ${error.message}`, true); }
+    };
+    $('background-clear').onclick = async () => {
+      try {
+        backgroundFile = null;
+        await backgroundStore(null);
+        settings = sanitizeSettings({...settings,background:'transparent'});
+        await viewer.setBackgroundImage(null, settings);
+        syncSettings(); persist(); sendState();
+        status('背景画像を削除しました。');
+      } catch (error) { status(`背景画像を削除できませんでした: ${error.message}`, true); }
+    };
     for (const model of sampleModels) $('sample-model').add(new Option(model.name,model.id));
     $('sample-model').onchange = () => { if ($('sample-model').value) loadModel(null,true,$('sample-model').value); };
     $('sample').onclick = () => loadModel(null);
@@ -525,7 +559,7 @@ async function init() {
     $('output').onclick = () => {
       popup=window.open('./?output=1','vrmc-fullbody-output','popup,width=1280,height=720');
       if (!popup) { status('ポップアップがブロックされました。このサイトのポップアップを許可してください。',true); return; }
-      status('OBSのウィンドウキャプチャで「VRMC Full Body — 配信出力」を選択してください。透過には背景をグリーンにしてクロマキーを使います。');
+      status('OBSのウィンドウキャプチャで「VRMC Full Body — 配信出力」を選択してください。');
     };
     window.addEventListener('message', event => {
       if(event.origin!==origin || event.source!==popup || event.data?.vrmc!=='fullbody' || event.data.type!=='ready') return;
@@ -539,7 +573,8 @@ async function init() {
       if (/INPUT|SELECT|TEXTAREA/.test(event.target.tagName)) return;
       if ((event.ctrlKey||event.metaKey) && ['ArrowLeft','ArrowRight'].includes(event.key)) {
         event.preventDefault(); const backgrounds=['transparent','green','blue','color'];
-        settings.background=backgrounds[(backgrounds.indexOf(settings.background)+(event.key==='ArrowRight'?1:3))%backgrounds.length];
+        const current = Math.max(0, backgrounds.indexOf(settings.background));
+        settings.background=backgrounds[(current+(event.key==='ArrowRight'?1:backgrounds.length-1))%backgrounds.length];
         syncSettings(); persist(); sendState();
       }
     });
