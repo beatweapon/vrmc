@@ -12,7 +12,6 @@ const MODELS = {
 
 const tasks = {};
 const canvases = [];
-const poseHandDepth = { left: null, right: null };
 let initialized = false;
 let initializing = false;
 let lastTimestamp = -Infinity;
@@ -74,51 +73,19 @@ async function initialize({ delegate, quality }) {
   self.postMessage({ type: 'ready', delegate });
 }
 
-function invalidatePoseHand(pose, side) {
-  poseHandDepth[side] = null;
-  const indices = side === 'left' ? [15, 17, 19, 21] : [16, 18, 20, 22];
+function disablePoseHandLandmarks(pose, enabled) {
+  if (!enabled) return;
+  // When Hand tracking is enabled, HandLandmarker exclusively owns wrist
+  // position, palm orientation and fingers. Pose remains useful through the
+  // elbow, but its wrist/thumb/index/little landmarks are too prone to
+  // background hallucinations and unstable monocular depth to drive the arm.
   for (const collection of [pose.landmarks?.[0], pose.worldLandmarks?.[0]]) {
     if (!collection) continue;
-    for (const index of indices) {
+    for (const index of [15, 16, 17, 18, 19, 20, 21, 22]) {
       const point = collection[index];
       if (!point) continue;
       point.visibility = 0;
       point.presence = 0;
-    }
-  }
-}
-
-function validatePoseHands(pose, hands, enabled) {
-  if (!enabled) return;
-  const poseImage = pose.landmarks?.[0];
-  const poseWorld = pose.worldLandmarks?.[0];
-  if (!poseImage) return;
-  const handWrists = (hands?.landmarks ?? []).map(points => points?.[0]).filter(Boolean);
-  for (const [side, index] of [['left', 15], ['right', 16]]) {
-    const wrist = poseImage[index];
-    if (!wrist) {
-      invalidatePoseHand(pose, side);
-      continue;
-    }
-    // Pose sometimes hallucinates its four hand landmarks on background detail.
-    // A real HandLandmarker wrist should occupy roughly the same image region.
-    const hand = handWrists.find(candidate => Math.hypot(candidate.x - wrist.x, candidate.y - wrist.y) < 0.14);
-    if (!hand) {
-      invalidatePoseHand(pose, side);
-      continue;
-    }
-
-    // Hand world landmarks are hand-centered, so absolute depth still comes
-    // from Pose. Smooth only that weak monocular Z cue; Hand continues to own
-    // image X/Y and palm/finger articulation.
-    const worldWrist = poseWorld?.[index];
-    if (worldWrist && Number.isFinite(worldWrist.z)) {
-      const previous = poseHandDepth[side];
-      const moving = previous && Math.hypot(hand.x - previous.x, hand.y - previous.y) > 0.06;
-      const amount = previous ? (moving ? 0.55 : 0.22) : 1;
-      const z = previous ? previous.z + amount * (worldWrist.z - previous.z) : worldWrist.z;
-      worldWrist.z = z;
-      poseHandDepth[side] = { x: hand.x, y: hand.y, z };
     }
   }
 }
@@ -131,19 +98,18 @@ function detect({ bitmap, timestamp, time, trackHands }) {
     // Defend the VIDEO contract even if the page clock is rounded for privacy.
     lastTimestamp = Math.max(timestamp, lastTimestamp + 1);
 
-    // Hand latency matters more than keeping Pose/Hand delivery atomic. Run the
-    // hand graph first and publish it immediately, then let the heavier Pose
-    // graph finish. Both observations still carry the same camera capture time.
+    // Run Hand before Pose so it is not additionally delayed by Pose within
+    // this frame. Delivery stays atomic for TrackingState until Hand gets its
+    // own independent capture cadence in a follow-up change.
     const hands = trackHands ? tasks.hands.detectForVideo(bitmap, lastTimestamp) : null;
-    if (hands) self.postMessage({ type: 'hands', result: { hands, time } });
-
     pose = tasks.pose.detectForVideo(bitmap, lastTimestamp);
-    validatePoseHands(pose, hands, trackHands);
+    disablePoseHandLandmarks(pose, trackHands);
     const result = {
       // Only clone serializable data; segmentation is deliberately disabled.
       pose: { landmarks: pose.landmarks, worldLandmarks: pose.worldLandmarks },
       time,
     };
+    if (hands) result.hands = hands;
     self.postMessage({ type: 'results', result });
   } catch (error) {
     console.error('MediaPipe inference:', error);
@@ -158,7 +124,6 @@ function detect({ bitmap, timestamp, time, trackHands }) {
 
 function dispose() {
   initialized = false;
-  poseHandDepth.left = poseHandDepth.right = null;
   for (const [key, task] of Object.entries(tasks)) {
     try { task.close(); } catch { /* Continue releasing the remaining graphs. */ }
     delete tasks[key];
