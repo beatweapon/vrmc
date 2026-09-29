@@ -80,13 +80,21 @@ function detect({ bitmap, timestamp, time, trackHands }) {
     if (!Number.isFinite(timestamp)) throw new Error('Invalid capture timestamp.');
     // Defend the VIDEO contract even if the page clock is rounded for privacy.
     lastTimestamp = Math.max(timestamp, lastTimestamp + 1);
+
+    // Hand latency matters more than keeping Pose/Hand delivery atomic. Run the
+    // hand graph first and publish it immediately, then let the heavier Pose
+    // graph finish. Both observations still carry the same camera capture time.
+    if (trackHands) {
+      const hands = tasks.hands.detectForVideo(bitmap, lastTimestamp);
+      self.postMessage({ type: 'hands', result: { hands, time } });
+    }
+
     pose = tasks.pose.detectForVideo(bitmap, lastTimestamp);
     const result = {
       // Only clone serializable data; segmentation is deliberately disabled.
       pose: { landmarks: pose.landmarks, worldLandmarks: pose.worldLandmarks },
       time,
     };
-    if (trackHands) result.hands = tasks.hands.detectForVideo(bitmap, lastTimestamp);
     self.postMessage({ type: 'results', result });
   } catch (error) {
     console.error('MediaPipe inference:', error);
