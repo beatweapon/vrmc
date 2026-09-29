@@ -7,9 +7,10 @@ const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmar
 
 /** Camera ownership stays with the caller; this class owns inference only. */
 export class Tracker {
-  constructor({ onResults = () => {}, onFace = () => {}, onStatus = () => {}, onError = () => {} } = {}) {
+  constructor({ onResults = () => {}, onFace = () => {}, onHands = () => {}, onStatus = () => {}, onError = () => {} } = {}) {
     this.onResults = onResults;
     this.onFace = onFace;
+    this.onHands = onHands;
     this.onStatus = onStatus;
     this.onError = onError;
     this._session = null;
@@ -151,16 +152,16 @@ export class Tracker {
         } else if (data.type === 'ready') {
           session.workerReady = true;
           this._maybeReady(session);
+        } else if (data.type === 'hands') {
+          if (session.trackHands) this._notify(this.onHands, data.result);
         } else if (data.type === 'results') {
           clearTimeout(session.inferenceTimer);
           session.busy = false;
           const result = data.result;
-          // app.js historically receives one coherent object containing face,
-          // pose and hands. Keep that contract while face inference runs on its
-          // own main-thread cadence. receiveFace() ignores older body timestamps,
-          // so the independently delivered face packet remains authoritative.
+          // Face inference runs on its own main-thread cadence. receiveFace()
+          // ignores older body timestamps, so the independently delivered face
+          // packet remains authoritative.
           if (session.latestFace) result.face = session.latestFace;
-          if (!session.trackHands) delete result.hands;
           this._notify(this.onResults, result);
           this._schedule(session);
         } else if (data.type === 'error') {
