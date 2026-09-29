@@ -1,4 +1,4 @@
-import { Box3, Vector3 } from 'three';
+import { Box3, Matrix4, Quaternion, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import {
@@ -9,6 +9,35 @@ import { dampVector } from './motion.js';
 
 const EXPRESSION_NAMES = ['blink', 'blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh', 'happy', 'angry', 'sad', 'relaxed', 'surprised'];
 const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+const BODY_DEAD_ZONE = Object.freeze({ hips: 1 * Math.PI / 180, torso: 1.5 * Math.PI / 180 });
+const finiteQuaternion = value => Array.isArray(value) && value.length === 4 && value.every(Number.isFinite);
+const posePoint = point => point && [point.x, point.y, point.z].every(Number.isFinite)
+  ? new Vector3(point.x, -point.y, -point.z) : null;
+const poseMidpoint = (points, a, b) => posePoint(points?.[a])?.add(posePoint(points?.[b])).multiplyScalar(0.5) ?? null;
+const poseBasis = (across, up) => {
+  if (!across || !up || across.lengthSq() < 1e-8 || up.lengthSq() < 1e-8) return null;
+  const x = across.clone().normalize();
+  const z = x.clone().cross(up).normalize();
+  if (z.lengthSq() < 0.5 || Math.abs(x.dot(up.clone().normalize())) > 0.97) return null;
+  const y = z.clone().cross(x).normalize();
+  return new Quaternion().setFromRotationMatrix(new Matrix4().makeBasis(x, y, z)).normalize();
+};
+const bodyOrientation = pose => {
+  const points = pose?.worldLandmarks?.[0];
+  const leftShoulder = posePoint(points?.[11]);
+  const rightShoulder = posePoint(points?.[12]);
+  const leftHip = posePoint(points?.[23]);
+  const rightHip = posePoint(points?.[24]);
+  const shoulders = poseMidpoint(points, 11, 12);
+  const hips = poseMidpoint(points, 23, 24);
+  if (![leftShoulder, rightShoulder, leftHip, rightHip, shoulders, hips].every(Boolean)) return null;
+  const up = shoulders.sub(hips);
+  if (up.lengthSq() < 1e-8) return null;
+  const pelvisUp = new Vector3(0, 1, 0).lerp(up.clone().normalize(), 0.2);
+  const hip = poseBasis(leftHip.sub(rightHip), pelvisUp);
+  const torso = poseBasis(leftShoulder.sub(rightShoulder), up);
+  return hip && torso ? { hips: hip, torso } : null;
+};
 
 export class FullBodyAvatar {
   static async load(url, scene) {
@@ -53,6 +82,8 @@ export class FullBodyAvatar {
     this.rootTarget = new Vector3();
     this.rootTime = -Infinity;
     this.calibration = null;
+    this.bodyNeutral = {};
+    this.bodyRotationHold = {};
     this.lastExpressions = {};
     this.lastGaze = { yaw: 0, pitch: 0 };
     this.lastFaceTime = -Infinity;
@@ -70,16 +101,61 @@ export class FullBodyAvatar {
 
   calibrate(poseResult) {
     const calibration = calibrateBody(poseResult);
+    const normal = bodyOrientation(poseResult);
+    const mirroredPose = mirrorBodyInput(poseResult, null, null)?.pose;
+    const mirrored = bodyOrientation(mirroredPose);
+    if (normal) {
+      calibration.hipsNeutral = normal.hips.toArray();
+      calibration.torsoNeutral = normal.torso.toArray();
+    }
+    if (mirrored) {
+      calibration.hipsNeutralMirrored = mirrored.hips.toArray();
+      calibration.torsoNeutralMirrored = mirrored.torso.toArray();
+    }
     this.setCalibration(calibration);
     return calibration;
   }
 
   setCalibration(calibration) {
     this.calibration = validateBodyCalibration(calibration) ? { ...calibration } : null;
+    this.bodyNeutral = {};
+    this.bodyRotationHold = {};
     this.root.set(0, 0, 0);
     this.rootVelocity?.set(0, 0, 0);
     this.rootTarget.set(0, 0, 0);
     this.rootTime = -Infinity;
+  }
+
+  neutralRotation(name, mirrored, measured) {
+    const suffix = mirrored ? 'Mirrored' : '';
+    const saved = this.calibration?.[`${name}Neutral${suffix}`];
+    if (finiteQuaternion(saved)) return new Quaternion().fromArray(saved).normalize();
+    const key = `${mirrored ? 'mirrored' : 'normal'}:${name}`;
+    if (!this.bodyNeutral[key] && measured) this.bodyNeutral[key] = measured.clone();
+    return this.bodyNeutral[key] ?? null;
+  }
+
+  stabilizeRotation(name, rotation) {
+    if (!rotation) return null;
+    const previous = this.bodyRotationHold[name];
+    if (!previous) {
+      this.bodyRotationHold[name] = rotation.clone();
+      return rotation;
+    }
+    if (previous.angleTo(rotation) < BODY_DEAD_ZONE[name]) return previous.clone();
+    previous.copy(rotation);
+    return rotation;
+  }
+
+  prepareBodySolution(solution, mirrored) {
+    for (const name of ['hips', 'torso']) {
+      const measured = solution[name];
+      if (!measured) continue;
+      const neutral = this.neutralRotation(name, mirrored, measured);
+      const relative = neutral ? measured.clone().multiply(neutral.clone().invert()).normalize() : measured.clone();
+      solution[name] = this.stabilizeRotation(name, relative);
+    }
+    return solution;
   }
 
   update(frame = {}, deltaSeconds = 1 / 60, settings = {}) {
@@ -97,13 +173,15 @@ export class FullBodyAvatar {
     if (this.mirrored !== undefined && this.mirrored !== mirrored) {
       for (const side of ['left', 'right']) this.rig.releaseArm(side, now);
       this.rig.imageReference = {};
+      this.bodyNeutral = {};
+      this.bodyRotationHold = {};
     }
     this.mirrored = mirrored;
     const solveSettings = `${settings.minVisibility}/${settings.seated}/${settings.trackHands}/${mirrored}`;
     if (!this.solution || this.solutionSequence !== sequence || this.solveSettings !== solveSettings) {
       const input = mirrored ? mirrorBodyInput(pose, frame.hands, frame.faceLandmarks)
         : { pose, hands: frame.hands, faceLandmarks: frame.faceLandmarks };
-      this.solution = solveBody(input.pose, input.hands, settings, input.faceLandmarks);
+      this.solution = this.prepareBodySolution(solveBody(input.pose, input.hands, settings, input.faceLandmarks), mirrored);
       this.solution.captureTime = frame.captureTime ?? frame.sampleTime ?? sampleTime;
       this.solutionSequence = sequence;
       this.solveSettings = solveSettings;
