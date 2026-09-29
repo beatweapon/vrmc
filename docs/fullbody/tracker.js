@@ -35,6 +35,7 @@ export class Tracker {
       faceHandle: null,
       faceLastVideoTime: -1,
       faceLastTimestamp: -Infinity,
+      latestFace: null,
       ready: false,
       busy: false,
       frameTimer: null,
@@ -76,6 +77,7 @@ export class Tracker {
     session.faceHandle = null;
     try { session.faceLandmarker?.close?.(); } catch { /* Continue cleanup. */ }
     session.faceLandmarker = null;
+    session.latestFace = null;
     this._terminateWorker(session);
     session.video = null;
     session.reject?.(new DOMException('追跡の開始をキャンセルしました。', 'AbortError'));
@@ -121,6 +123,7 @@ export class Tracker {
       session.faceLastTimestamp = timestamp;
       try {
         const face = session.faceLandmarker.detectForVideo(video, timestamp);
+        session.latestFace = face;
         this._notify(this.onFace, { face, time: captureAt / 1000 });
       } catch (error) {
         console.error('Face inference:', error);
@@ -152,6 +155,11 @@ export class Tracker {
           clearTimeout(session.inferenceTimer);
           session.busy = false;
           const result = data.result;
+          // app.js historically receives one coherent object containing face,
+          // pose and hands. Keep that contract while face inference runs on its
+          // own main-thread cadence. receiveFace() ignores older body timestamps,
+          // so the independently delivered face packet remains authoritative.
+          if (session.latestFace) result.face = session.latestFace;
           if (!session.trackHands) delete result.hands;
           this._notify(this.onResults, result);
           this._schedule(session);
