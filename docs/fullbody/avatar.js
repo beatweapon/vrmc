@@ -179,6 +179,20 @@ export class FullBodyAvatar {
     return solution;
   }
 
+  applyRenderedBody(solution, now, dt, settings) {
+    const hips = solution.hips;
+    if (hips) {
+      this.rig.apply('hips', hips.clone().multiply(this.rig.rest.hips?.world ?? new Quaternion()), now, now, dt, settings, false, true);
+    }
+    const torsoNames = ['spine', 'chest', 'upperChest'].filter(name => this.rig.bones[name]);
+    torsoNames.forEach((name, index) => {
+      if (!solution.torso) return;
+      const orientation = (hips ?? new Quaternion()).clone().slerp(solution.torso, (index + 1) / torsoNames.length)
+        .multiply(this.rig.rest[name].world);
+      this.rig.apply(name, orientation, now, now, dt, settings, false, true);
+    });
+  }
+
   update(frame = {}, deltaSeconds = 1 / 60, settings = {}) {
     if (!this.vrm) return;
     const now = performance.now() / 1000;
@@ -215,6 +229,10 @@ export class FullBodyAvatar {
       hips: this.bodyRotation('hips', now, dt, settings),
       torso: this.bodyRotation('torso', now, dt, settings),
     };
+    // The rendered hips/torso are already a continuous render-time pose. Seed
+    // those exact bone rotations before the retargeter so its generic body
+    // spring sees zero remaining error instead of adding a second layer of lag.
+    this.applyRenderedBody(renderedSolution, now, dt, settings);
     const faceMotion = mirrored ? mirrorFaceMotion(frame.face) : frame.face;
     const faceTime = frame.faceTime ?? sampleTime;
     this.rig.update(renderedSolution, sampleTime, now, dt, settings, faceMotion ?? null, faceTime);
