@@ -8,14 +8,10 @@ export class Viewer {
   constructor(stage, {interactive = true, onViewChange = () => {}} = {}) {
     this.stage = stage;
     this.scene = new THREE.Scene();
-    this.scene.add(new THREE.AmbientLight(0xffffff, 1.2));
-    const light = new THREE.DirectionalLight(0xffffff, 1.0);
-    light.position.set(1, 3, 4);
-    this.scene.add(light);
+    this.scene.add(new THREE.AmbientLight(0xffffff, Math.PI));
     this.camera = new THREE.PerspectiveCamera(32, 1, .01, 100);
     this.camera.position.set(0, 1, 4);
     this.renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.domElement.setAttribute('aria-label', 'VRMアバター');
