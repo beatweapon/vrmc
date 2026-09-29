@@ -1,3 +1,10 @@
+import {
+  FaceLandmarker, FilesetResolver,
+} from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs';
+
+const WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
+const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task';
+
 /** Camera ownership stays with the caller; this class owns inference only. */
 export class Tracker {
   constructor({ onResults = () => {}, onFace = () => {}, onStatus = () => {}, onError = () => {} } = {}) {
@@ -22,6 +29,12 @@ export class Tracker {
       trackHands: Boolean(trackHands),
       quality: ['light', 'lite', 'performance'].includes(quality) ? 'light' : 'balanced',
       worker: null,
+      workerReady: false,
+      faceLandmarker: null,
+      faceReady: false,
+      faceHandle: null,
+      faceLastVideoTime: -1,
+      faceLastTimestamp: -Infinity,
       ready: false,
       busy: false,
       frameTimer: null,
@@ -37,11 +50,11 @@ export class Tracker {
     return new Promise((resolve, reject) => {
       session.resolve = resolve;
       session.reject = reject;
-      // An unavailable CDN or broken worker must never leave Start pending forever.
       session.startupTimer = setTimeout(() => {
         this._fail(session, new Error('追跡モデルの読み込みがタイムアウトしました。通信環境を確認して、もう一度開始してください。'));
       }, 120000);
       this._launchWorker(session, 'GPU');
+      this._launchFace(session);
     });
   }
 
@@ -50,8 +63,6 @@ export class Tracker {
     if (!session) return;
     if (fps !== undefined) session.fps = normalizeFps(fps);
     if (trackHands !== undefined) session.trackHands = Boolean(trackHands);
-    // Options travel with each frame: no command queue and no ambiguous option
-    // changes while a frame is being processed. In-flight hands are filtered below.
   }
 
   stop() {
@@ -61,10 +72,63 @@ export class Tracker {
     clearTimeout(session.frameTimer);
     clearTimeout(session.startupTimer);
     clearTimeout(session.inferenceTimer);
+    if (session.faceHandle != null) cancelAnimationFrame(session.faceHandle);
+    session.faceHandle = null;
+    try { session.faceLandmarker?.close?.(); } catch { /* Continue cleanup. */ }
+    session.faceLandmarker = null;
     this._terminateWorker(session);
     session.video = null;
     session.reject?.(new DOMException('追跡の開始をキャンセルしました。', 'AbortError'));
     session.resolve = session.reject = null;
+  }
+
+  async _launchFace(session) {
+    try {
+      this._notify(this.onStatus, '顔の追跡モデルを準備しています…（初回は読み込みに時間がかかります）');
+      const fileset = await FilesetResolver.forVisionTasks(WASM_ROOT);
+      const faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: FACE_MODEL, delegate: 'GPU' },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+        outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: true,
+        minFaceDetectionConfidence: 0.5,
+        minFacePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.55,
+      });
+      if (this._session !== session) {
+        faceLandmarker.close?.();
+        return;
+      }
+      session.faceLandmarker = faceLandmarker;
+      session.faceReady = true;
+      this._faceLoop(session);
+      this._maybeReady(session);
+    } catch (error) {
+      console.error('Face tracking initialization:', error);
+      this._fail(session, new Error('顔の追跡モデルを読み込めませんでした。通信環境を確認し、最新版の Chrome または Edge で開始し直してください。'));
+    }
+  }
+
+  _faceLoop(session) {
+    if (this._session !== session || !session.faceLandmarker) return;
+    const video = session.video;
+    if (video.readyState >= 2 && video.videoWidth && video.videoHeight &&
+        video.currentTime !== session.faceLastVideoTime) {
+      session.faceLastVideoTime = video.currentTime;
+      const captureAt = performance.now();
+      const timestamp = Math.max(captureAt, session.faceLastTimestamp + 1);
+      session.faceLastTimestamp = timestamp;
+      try {
+        const face = session.faceLandmarker.detectForVideo(video, timestamp);
+        this._notify(this.onFace, { face, time: captureAt / 1000 });
+      } catch (error) {
+        console.error('Face inference:', error);
+        this._fail(session, new Error('顔の追跡中にエラーが発生しました。カメラを開始し直してください。'));
+        return;
+      }
+    }
+    session.faceHandle = requestAnimationFrame(() => this._faceLoop(session));
   }
 
   _launchWorker(session, delegate) {
@@ -78,22 +142,12 @@ export class Tracker {
         if (data.type === 'status') {
           this._notify(this.onStatus, data.message);
         } else if (data.type === 'retry-cpu' && delegate === 'GPU') {
-          // Replacing the worker also releases partially initialized WASM graphs
-          // that createFromOptions cannot return to us after a GPU failure.
           this._terminateWorker(session);
-          this._notify(this.onStatus, 'GPU での追跡を開始できなかったため、CPU に切り替えています…');
+          this._notify(this.onStatus, 'GPU での体・手追跡を開始できなかったため、CPU に切り替えています…');
           this._launchWorker(session, 'CPU');
         } else if (data.type === 'ready') {
-          session.ready = true;
-          clearTimeout(session.startupTimer);
-          session.resolve?.();
-          session.resolve = session.reject = null;
-          this._notify(this.onStatus, delegate === 'GPU' ? '全身追跡中' : '全身追跡中（CPU・動きが重い場合は軽量モードを選んでください）');
-          this._schedule(session, 0);
-        } else if (data.type === 'face') {
-          // This is a partial delivery, not completion: keep the inference
-          // timeout and busy flag until Pose and Hand finish the same frame.
-          this._notify(this.onFace, data.result);
+          session.workerReady = true;
+          this._maybeReady(session);
         } else if (data.type === 'results') {
           clearTimeout(session.inferenceTimer);
           session.busy = false;
@@ -120,6 +174,18 @@ export class Tracker {
       console.error('Tracking worker initialization:', error);
       this._fail(session, new Error('全身追跡を開始できませんでした。最新版の Chrome または Edge で、HTTPS または localhost から開いてください。'));
     }
+  }
+
+  _maybeReady(session) {
+    if (this._session !== session || session.ready || !session.workerReady || !session.faceReady) return;
+    session.ready = true;
+    clearTimeout(session.startupTimer);
+    session.resolve?.();
+    session.resolve = session.reject = null;
+    this._notify(this.onStatus, '全身追跡中');
+    // Yield back to startCamera() before body results begin arriving. Face has
+    // its own requestAnimationFrame loop and can populate the first face state.
+    session.frameTimer = setTimeout(() => this._schedule(session, 0), 0);
   }
 
   _schedule(session, delay) {
@@ -151,7 +217,6 @@ export class Tracker {
         resizeHeight: Math.max(1, Math.round(video.videoHeight * scale)),
         resizeQuality: 'medium',
       });
-      // Stop/start can finish while createImageBitmap is still pending.
       if (this._session !== session) {
         bitmap.close();
         return;
@@ -161,7 +226,7 @@ export class Tracker {
         time: session.lastCaptureAt / 1000,
         trackHands: session.trackHands,
       }, [bitmap]);
-      bitmap = null; // The worker now owns (and always closes) this bitmap.
+      bitmap = null;
       session.inferenceTimer = setTimeout(() => {
         this._fail(session, new Error('追跡処理が応答しなくなりました。軽量モードに切り替えるか、カメラを開始し直してください。'));
       }, 20000);
@@ -176,8 +241,6 @@ export class Tracker {
   _terminateWorker(session) {
     if (!session.worker) return;
     session.worker.onmessage = session.worker.onerror = session.worker.onmessageerror = null;
-    // Terminate is intentional: it also cancels model fetches / initialization
-    // and releases worker-owned bitmaps and graphs without waiting on inference.
     session.worker.terminate();
     session.worker = null;
   }
@@ -188,7 +251,6 @@ export class Tracker {
     session.reject?.(error);
     session.resolve = session.reject = null;
     this.stop();
-    // Initialization errors use the start() promise; later failures use onError.
     if (!wasStarting) this._notify(this.onError, error);
   }
 
@@ -198,7 +260,7 @@ export class Tracker {
   }
 }
 
-function normalizeFps(value) {
+const normalizeFps = value => {
   const number = Number(value);
   return Number.isFinite(number) ? Math.min(60, Math.max(5, number)) : 24;
-}
+};
