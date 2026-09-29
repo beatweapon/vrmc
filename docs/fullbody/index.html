@@ -4,8 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#14191e" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="VRMC Full Body" />
   <title>VRMC Full Body — 全身で、伝える。</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="../assets/icons/icon_16.png" />
+  <link rel="apple-touch-icon" href="../assets/icons/icon_180.png" />
   <link rel="stylesheet" href="./style.css" />
   <script type="importmap">{"imports":{
     "three":"https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
@@ -66,6 +72,14 @@
       retry.textContent = 'ページを再読み込み';
       retry.onclick = () => location.reload();
     });
+  </script>
+  <script>
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' })
+          .catch(error => console.warn('Service worker registration failed:', error));
+      });
+    }
   </script>
 </body>
 </html>

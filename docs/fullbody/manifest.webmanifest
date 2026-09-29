@@ -1,0 +1,25 @@
+{
+  "name": "VRMC Full Body — 全身で、伝える。",
+  "short_name": "VRMC Full Body",
+  "description": "WebカメラでVRMアバターを動かすWebcam Motion Studio",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#14191e",
+  "theme_color": "#14191e",
+  "icons": [
+    {
+      "src": "../assets/icons/icon_192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "../assets/icons/icon_512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
