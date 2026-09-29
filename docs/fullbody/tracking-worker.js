@@ -73,18 +73,37 @@ async function initialize({ delegate, quality }) {
   self.postMessage({ type: 'ready', delegate });
 }
 
-function disablePoseFingerLandmarks(pose, enabled) {
+function gatePoseHandLandmarks(pose, hands, enabled) {
   if (!enabled) return;
-  // HandLandmarker exclusively owns palm/finger articulation. Keep Pose wrist
-  // 15/16 because body.js can use the shoulder->elbow->wrist directions only
-  // after that wrist is corroborated by the HandLandmarker wrist in image space.
-  for (const collection of [pose.landmarks?.[0], pose.worldLandmarks?.[0]]) {
-    if (!collection) continue;
+  const imagePose = pose.landmarks?.[0];
+  const handWrists = (hands?.landmarks ?? []).map(points => points?.[0]).filter(Boolean);
+  const aspect = Number.isFinite(pose.imageWidth) && Number.isFinite(pose.imageHeight) && pose.imageHeight > 0
+    ? pose.imageWidth / pose.imageHeight : 1;
+
+  // HandLandmarker owns fingers. Pose wrist 15/16 is kept only when a real
+  // 21-point Hand wrist corroborates it in image space. This preserves main's
+  // arm solver while preventing a sparse Pose-only hand from becoming a target.
+  for (const [image, world] of [[pose.landmarks?.[0], pose.worldLandmarks?.[0]]]) {
+    if (!image && !world) continue;
     for (const index of [17, 18, 19, 20, 21, 22]) {
-      const point = collection[index];
-      if (!point) continue;
-      point.visibility = 0;
-      point.presence = 0;
+      for (const collection of [image, world]) {
+        const point = collection?.[index];
+        if (!point) continue;
+        point.visibility = 0;
+        point.presence = 0;
+      }
+    }
+    for (const wristIndex of [15, 16]) {
+      const poseWrist = imagePose?.[wristIndex];
+      const corroborated = poseWrist && handWrists.some(wrist =>
+        Math.hypot((wrist.x - poseWrist.x) * aspect, wrist.y - poseWrist.y) < .14);
+      if (corroborated) continue;
+      for (const collection of [image, world]) {
+        const point = collection?.[wristIndex];
+        if (!point) continue;
+        point.visibility = 0;
+        point.presence = 0;
+      }
     }
   }
 }
@@ -102,7 +121,7 @@ function detect({ bitmap, timestamp, time, trackHands }) {
     // own independent capture cadence in a follow-up change.
     const hands = trackHands ? tasks.hands.detectForVideo(bitmap, lastTimestamp) : null;
     pose = tasks.pose.detectForVideo(bitmap, lastTimestamp);
-    disablePoseFingerLandmarks(pose, trackHands);
+    gatePoseHandLandmarks(pose, hands, trackHands);
     const result = {
       // Only clone serializable data; segmentation is deliberately disabled.
       pose: { landmarks: pose.landmarks, worldLandmarks: pose.worldLandmarks },
