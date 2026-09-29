@@ -37,6 +37,8 @@ export class Tracker {
       faceLastVideoTime: -1,
       faceLastTimestamp: -Infinity,
       latestFace: null,
+      latestHands: null,
+      latestHandsTime: -Infinity,
       ready: false,
       busy: false,
       frameTimer: null,
@@ -64,7 +66,13 @@ export class Tracker {
     const session = this._session;
     if (!session) return;
     if (fps !== undefined) session.fps = normalizeFps(fps);
-    if (trackHands !== undefined) session.trackHands = Boolean(trackHands);
+    if (trackHands !== undefined) {
+      session.trackHands = Boolean(trackHands);
+      if (!session.trackHands) {
+        session.latestHands = null;
+        session.latestHandsTime = -Infinity;
+      }
+    }
   }
 
   stop() {
@@ -79,6 +87,7 @@ export class Tracker {
     try { session.faceLandmarker?.close?.(); } catch { /* Continue cleanup. */ }
     session.faceLandmarker = null;
     session.latestFace = null;
+    session.latestHands = null;
     this._terminateWorker(session);
     session.video = null;
     session.reject?.(new DOMException('追跡の開始をキャンセルしました。', 'AbortError'));
@@ -153,7 +162,11 @@ export class Tracker {
           session.workerReady = true;
           this._maybeReady(session);
         } else if (data.type === 'hands') {
-          if (session.trackHands) this._notify(this.onHands, data.result);
+          if (session.trackHands) {
+            session.latestHands = data.result.hands;
+            session.latestHandsTime = data.result.time;
+            this._notify(this.onHands, data.result);
+          }
         } else if (data.type === 'results') {
           clearTimeout(session.inferenceTimer);
           session.busy = false;
@@ -162,6 +175,11 @@ export class Tracker {
           // ignores older body timestamps, so the independently delivered face
           // packet remains authoritative.
           if (session.latestFace) result.face = session.latestFace;
+          // Hand is published early but remains part of the coherent body packet
+          // for the existing TrackingState/identity pipeline.
+          if (session.trackHands && session.latestHands && session.latestHandsTime === result.time) {
+            result.hands = session.latestHands;
+          }
           this._notify(this.onResults, result);
           this._schedule(session);
         } else if (data.type === 'error') {
