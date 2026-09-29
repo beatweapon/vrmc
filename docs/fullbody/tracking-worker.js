@@ -75,9 +75,9 @@ async function initialize({ delegate, quality }) {
 
 function disablePoseFingerLandmarks(pose, enabled) {
   if (!enabled) return;
-  // HandLandmarker exclusively owns palm/finger articulation. Keep only Pose's
-  // wrist (15/16) so elbow->wrist direction can stabilize the arm bend plane;
-  // body.js never uses that Pose wrist as an absolute wrist position target.
+  // HandLandmarker exclusively owns palm/finger articulation. Keep Pose wrist
+  // 15/16 because body.js can use the shoulder->elbow->wrist directions only
+  // after that wrist is corroborated by the HandLandmarker wrist in image space.
   for (const collection of [pose.landmarks?.[0], pose.worldLandmarks?.[0]]) {
     if (!collection) continue;
     for (const index of [17, 18, 19, 20, 21, 22]) {
