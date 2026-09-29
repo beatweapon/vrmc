@@ -200,18 +200,24 @@ export function solveBody(pose, hands, settings = {}, faceLandmarks = null) {
       if (!visible(hand, [0, 5, 9, 17], 0)) continue;
       const wristIndex=side==='left'?15:16;
       const lowerName=`${side}LowerArm`;
-      // HandLandmarker exclusively owns wrist position. Pose may contribute the
-      // elbow->wrist direction only when its wrist agrees with the Hand wrist,
-      // giving IK a bend-plane hint without becoming a competing position path.
+      // HandLandmarker exclusively owns wrist x/y. A corroborated Pose wrist
+      // may contribute depth and elbow->wrist direction, but never x/y.
       result.armTargets[side] = {
         ...anchors, wrist: { x: image[0].x, y: image[0].y }, physicalId,
         elbowDirection: result.directions[`${side}UpperArm`]?.clone() ?? null,
         forearmDirection: null,
+        depthRatio: null,
       };
       if (poseVisible(pose,[wristIndex],threshold)) {
         const imageWrist=pose.landmarks?.[0]?.[wristIndex];
         if (imageWrist && Math.hypot((imageWrist.x-image[0].x)*anchors.aspect,imageWrist.y-image[0].y)<.12) {
           result.armTargets[side].forearmDirection = result.directions[lowerName]?.clone() ?? null;
+          if (visible(points,[11,12,wristIndex],threshold)) {
+            const shoulderSpan=landmarkVector(points[11]).distanceTo(landmarkVector(points[12]));
+            const shoulderDepth=midpoint(points,11,12).z;
+            result.armTargets[side].depthRatio=clamp(
+              (landmarkVector(points[wristIndex]).z-shoulderDepth)/Math.max(.1,shoulderSpan),-1.25,1.25);
+          }
         }
       }
       // Finger articulation is independent of whether the torso can be found.
@@ -641,8 +647,8 @@ export class BodyRetargeter {
           recent = { motion: new ArmMotion(wrist.clone().sub(shoulder).applyQuaternion(inverse)) };
         }
         const offset = handTarget.clone().sub(shoulder);
-        // Weak monocular depth is intentionally not borrowed from Pose. Keep the
-        // Hand image target within the physical reach in camera axes.
+        // Pose depth is accepted only after image-space wrist corroboration.
+        // Regardless of source, keep the resulting 3D target physically reachable.
         const reach = upperLength + lowerLength;
         const depthReach = Math.sqrt(Math.max(0, reach * reach - offset.x ** 2 - offset.y ** 2));
         offset.z = clamp(offset.z, -depthReach, depthReach);
@@ -651,8 +657,7 @@ export class BodyRetargeter {
         let measured = upperDirection ?? anchor?.elbowDirection;
         if (anchor?.forearmDirection) {
           // Reconstruct an elbow from the Hand-owned wrist target and only the
-          // Pose elbow->wrist DIRECTION. Pose wrist position/depth never becomes
-          // the wrist target, but its forearm line constrains the bend plane.
+          // Pose elbow->wrist DIRECTION. Pose x/y never becomes the wrist target.
           measured = handTarget.clone().addScaledVector(anchor.forearmDirection, -lowerLength).sub(shoulder);
         }
         if (measured) {
