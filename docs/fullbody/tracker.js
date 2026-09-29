@@ -16,6 +16,7 @@ export class Tracker {
     }
     if (!video) throw new Error('追跡するカメラ映像がありません。カメラを選び直してください。');
 
+    const now = performance.now();
     const session = {
       video,
       fps: normalizeFps(fps),
@@ -32,12 +33,25 @@ export class Tracker {
       lastTimestamp: -Infinity,
       resolve: null,
       reject: null,
+      diagnostics: {
+        startedAt: now,
+        windowAt: now,
+        captureAttempts: 0,
+        videoChanges: 0,
+        sentFrames: 0,
+        resultFrames: 0,
+        bitmapMs: 0,
+        bitmapCount: 0,
+        faceMs: 0,
+        poseMs: 0,
+        handMs: 0,
+        workerMs: 0,
+      },
     };
     this._session = session;
     return new Promise((resolve, reject) => {
       session.resolve = resolve;
       session.reject = reject;
-      // An unavailable CDN or broken worker must never leave Start pending forever.
       session.startupTimer = setTimeout(() => {
         this._fail(session, new Error('追跡モデルの読み込みがタイムアウトしました。通信環境を確認して、もう一度開始してください。'));
       }, 120000);
@@ -50,8 +64,6 @@ export class Tracker {
     if (!session) return;
     if (fps !== undefined) session.fps = normalizeFps(fps);
     if (trackHands !== undefined) session.trackHands = Boolean(trackHands);
-    // Options travel with each frame: no command queue and no ambiguous option
-    // changes while a frame is being processed. In-flight hands are filtered below.
   }
 
   stop() {
@@ -78,8 +90,6 @@ export class Tracker {
         if (data.type === 'status') {
           this._notify(this.onStatus, data.message);
         } else if (data.type === 'retry-cpu' && delegate === 'GPU') {
-          // Replacing the worker also releases partially initialized WASM graphs
-          // that createFromOptions cannot return to us after a GPU failure.
           this._terminateWorker(session);
           this._notify(this.onStatus, 'GPU での追跡を開始できなかったため、CPU に切り替えています…');
           this._launchWorker(session, 'CPU');
@@ -91,14 +101,13 @@ export class Tracker {
           this._notify(this.onStatus, delegate === 'GPU' ? '全身追跡中' : '全身追跡中（CPU・動きが重い場合は軽量モードを選んでください）');
           this._schedule(session, 0);
         } else if (data.type === 'face') {
-          // This is a partial delivery, not completion: keep the inference
-          // timeout and busy flag until Pose and Hand finish the same frame.
           this._notify(this.onFace, data.result);
         } else if (data.type === 'results') {
           clearTimeout(session.inferenceTimer);
           session.busy = false;
           const result = data.result;
           if (!session.trackHands) delete result.hands;
+          this._recordResultDiagnostics(session, result.diagnostics);
           this._notify(this.onResults, result);
           this._schedule(session);
         } else if (data.type === 'error') {
@@ -132,11 +141,14 @@ export class Tracker {
   async _capture(session) {
     if (this._session !== session || session.busy) return;
     const video = session.video;
+    const diagnostics = session.diagnostics;
+    diagnostics.captureAttempts++;
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight ||
         video.currentTime === session.lastVideoTime) {
       this._schedule(session, 16);
       return;
     }
+    diagnostics.videoChanges++;
     session.busy = true;
     session.lastVideoTime = video.currentTime;
     session.lastCaptureAt = performance.now();
@@ -146,22 +158,27 @@ export class Tracker {
     const scale = Math.min(1, maxWidth / video.videoWidth);
     let bitmap;
     try {
+      const bitmapStart = performance.now();
       bitmap = await createImageBitmap(video, {
         resizeWidth: Math.max(1, Math.round(video.videoWidth * scale)),
         resizeHeight: Math.max(1, Math.round(video.videoHeight * scale)),
         resizeQuality: 'medium',
       });
-      // Stop/start can finish while createImageBitmap is still pending.
+      const bitmapMs = performance.now() - bitmapStart;
+      diagnostics.bitmapMs += bitmapMs;
+      diagnostics.bitmapCount++;
       if (this._session !== session) {
         bitmap.close();
         return;
       }
+      diagnostics.sentFrames++;
       session.worker.postMessage({
         type: 'frame', bitmap, timestamp,
         time: session.lastCaptureAt / 1000,
         trackHands: session.trackHands,
+        diagnostics: { bitmapMs },
       }, [bitmap]);
-      bitmap = null; // The worker now owns (and always closes) this bitmap.
+      bitmap = null;
       session.inferenceTimer = setTimeout(() => {
         this._fail(session, new Error('追跡処理が応答しなくなりました。軽量モードに切り替えるか、カメラを開始し直してください。'));
       }, 20000);
@@ -173,11 +190,51 @@ export class Tracker {
     }
   }
 
+  _recordResultDiagnostics(session, values = {}) {
+    const d = session.diagnostics;
+    d.resultFrames++;
+    for (const key of ['faceMs', 'poseMs', 'handMs', 'workerMs']) d[key] += Number(values[key]) || 0;
+    const now = performance.now();
+    const elapsed = now - d.windowAt;
+    if (elapsed < 1000) return;
+    const seconds = elapsed / 1000;
+    const avg = (value, count = d.resultFrames) => count ? value / count : 0;
+    const track = session.video?.srcObject?.getVideoTracks?.()[0];
+    const trackFps = track?.getSettings?.().frameRate;
+    const previewVisible = session.video?.offsetParent !== null;
+    const message = [
+      `計測 ${previewVisible ? 'PREVIEW ON' : 'PREVIEW OFF'}`,
+      `track ${Number.isFinite(trackFps) ? trackFps.toFixed(1) : '?'} fps`,
+      `capture ${Math.round(d.captureAttempts / seconds)}/s`,
+      `video ${Math.round(d.videoChanges / seconds)}/s`,
+      `send ${Math.round(d.sentFrames / seconds)}/s`,
+      `result ${Math.round(d.resultFrames / seconds)}/s`,
+      `bitmap ${avg(d.bitmapMs, d.bitmapCount).toFixed(1)} ms`,
+      `worker ${avg(d.workerMs).toFixed(1)} ms`,
+      `face ${avg(d.faceMs).toFixed(1)}`,
+      `pose ${avg(d.poseMs).toFixed(1)}`,
+      `hand ${avg(d.handMs).toFixed(1)} ms`,
+    ].join(' · ');
+    console.log(message);
+    this._notify(this.onStatus, message);
+    Object.assign(d, {
+      windowAt: now,
+      captureAttempts: 0,
+      videoChanges: 0,
+      sentFrames: 0,
+      resultFrames: 0,
+      bitmapMs: 0,
+      bitmapCount: 0,
+      faceMs: 0,
+      poseMs: 0,
+      handMs: 0,
+      workerMs: 0,
+    });
+  }
+
   _terminateWorker(session) {
     if (!session.worker) return;
     session.worker.onmessage = session.worker.onerror = session.worker.onmessageerror = null;
-    // Terminate is intentional: it also cancels model fetches / initialization
-    // and releases worker-owned bitmaps and graphs without waiting on inference.
     session.worker.terminate();
     session.worker = null;
   }
@@ -188,7 +245,6 @@ export class Tracker {
     session.reject?.(error);
     session.resolve = session.reject = null;
     this.stop();
-    // Initialization errors use the start() promise; later failures use onError.
     if (!wasStarting) this._notify(this.onError, error);
   }
 
