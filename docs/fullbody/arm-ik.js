@@ -42,11 +42,6 @@ function torsoInterior(point, width, height) {
   return (point.x / (width * 0.47)) ** 2 + (point.z / (width * 0.32)) ** 2 < torsoSection(point.y, height);
 }
 
-function torsoFrontZ(point, width, height) {
-  const section = torsoSection(point.y, height) - (point.x / (width * 0.47)) ** 2;
-  return section > 0 ? width * 0.32 * Math.sqrt(section) : null;
-}
-
 function clearBend(shoulder, solved, width, height) {
   const axis = solved.wrist.clone().sub(shoulder).normalize();
   const center = shoulder.clone().addScaledVector(axis, solved.elbow.clone().sub(shoulder).dot(axis));
@@ -54,11 +49,7 @@ function clearBend(shoulder, solved, width, height) {
   if (radius < 1e-6) return solved;
   const safe = angle => {
     const elbow = center.clone().addScaledVector(solved.bend.clone().applyAxisAngle(axis, angle), radius);
-    // When the elbow projects over the torso, keep it on the camera-facing side.
-    // Rotating on the feasible elbow circle preserves both arm lengths and the wrist.
-    const front = torsoFrontZ(elbow, width, height);
-    if (front !== null && elbow.z < front + width * 0.015) return false;
-    // Test both segments too, not just an endpoint outside the torso.
+    // Test the elbow and both segments, not just an endpoint outside the torso.
     for (const t of [0.25, 0.5, 0.75, 1]) {
       if (torsoInterior(shoulder.clone().lerp(elbow, t), width, height) ||
           torsoInterior(elbow.clone().lerp(solved.wrist, t), width, height)) return false;
@@ -127,8 +118,8 @@ export class ArmMotion {
     }
     const axis = wrist.clone().sub(shoulder).normalize();
     if (axis.lengthSq() < 0.5) axis.copy(this.axis ?? new Vector3(0, -1, 0));
-    // With no reliable measured elbow, prefer a relaxed lower/outward elbow on
-    // the camera-facing side of the torso. Positive z is toward the camera.
+    // With no measured elbow, prefer a relaxed lower/outward elbow on the
+    // camera-facing side. Positive z is toward the camera in this torso frame.
     const defaultPole = new Vector3(side === 'left' ? 0.15 : -0.15, -1, 0.25);
     const preferred = project(defaultPole, axis);
     const observed = measuredElbow && project(measuredElbow, axis);
