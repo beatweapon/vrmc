@@ -1,11 +1,10 @@
 import {
-  FaceLandmarker, FilesetResolver, HandLandmarker, PoseLandmarker,
+  FilesetResolver, HandLandmarker, PoseLandmarker,
 } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs';
 
 const WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
 const MODEL_ROOT = 'https://storage.googleapis.com/mediapipe-models';
 const MODELS = {
-  face: `${MODEL_ROOT}/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
   poseFull: `${MODEL_ROOT}/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task`,
   poseLite: `${MODEL_ROOT}/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
   hands: `${MODEL_ROOT}/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
@@ -25,7 +24,7 @@ self.onmessage = ({ data }) => {
       dispose();
       self.postMessage(data.delegate === 'GPU'
         ? { type: 'retry-cpu' }
-        : { type: 'error', message: '顔・体・手の追跡モデルを読み込めませんでした。通信環境を確認し、最新版の Chrome または Edge で開始し直してください。' });
+        : { type: 'error', message: '体・手の追跡モデルを読み込めませんでした。通信環境を確認し、最新版の Chrome または Edge で開始し直してください。' });
     });
   } else if (data.type === 'frame') {
     detect(data);
@@ -52,13 +51,6 @@ async function initialize({ delegate, quality }) {
     });
   }
 
-  tasks.face = await create(FaceLandmarker, '顔', MODELS.face, {
-    numFaces: 1,
-    outputFaceBlendshapes: true,
-    outputFacialTransformationMatrixes: true,
-    minFaceDetectionConfidence: 0.5,
-    minFacePresenceConfidence: 0.5,
-  });
   tasks.pose = await create(PoseLandmarker, '体', quality === 'light' ? MODELS.poseLite : MODELS.poseFull, {
     numPoses: 1,
     outputSegmentationMasks: false,
@@ -83,16 +75,10 @@ function detect({ bitmap, timestamp, time, trackHands, diagnostics }) {
     lastTimestamp = Math.max(timestamp, lastTimestamp + 1);
 
     const workerStart = performance.now();
-    const faceStart = workerStart;
-    const face = tasks.face.detectForVideo(bitmap, lastTimestamp);
-    const faceMs = performance.now() - faceStart;
-    self.postMessage({ type: 'face', result: { face, time } });
-
-    const poseStart = performance.now();
+    const poseStart = workerStart;
     pose = tasks.pose.detectForVideo(bitmap, lastTimestamp);
     const poseMs = performance.now() - poseStart;
     const result = {
-      face,
       pose: { landmarks: pose.landmarks, worldLandmarks: pose.worldLandmarks },
       time,
     };
@@ -105,7 +91,7 @@ function detect({ bitmap, timestamp, time, trackHands, diagnostics }) {
     }
     result.diagnostics = {
       ...(diagnostics || {}),
-      faceMs,
+      faceMs: 0,
       poseMs,
       handMs,
       workerMs: performance.now() - workerStart,
