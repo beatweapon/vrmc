@@ -198,20 +198,25 @@ export function solveBody(pose, hands, settings = {}, faceLandmarks = null) {
   if (settings.trackHands !== false) {
     for (const [side, { world: hand, image, physicalId }] of assignHands(hands, pose, threshold)) {
       if (!visible(hand, [0, 5, 9, 17], 0)) continue;
-      const wristIndex=side==='left'?15:16;
-      const lowerName=`${side}LowerArm`;
-      // HandLandmarker exclusively owns wrist position. Pose may contribute the
-      // elbow->wrist direction only when its wrist agrees with the Hand wrist,
-      // giving IK a bend-plane hint without becoming a competing position path.
+      const wristIndex = side === 'left' ? 15 : 16;
+      const upperName = `${side}UpperArm`;
+      const lowerName = `${side}LowerArm`;
+      // Hand owns wrist image position. Pose contributes the 3D arm skeleton
+      // only when its wrist corroborates the Hand wrist in image space.
       result.armTargets[side] = {
         ...anchors, wrist: { x: image[0].x, y: image[0].y }, physicalId,
-        elbowDirection: result.directions[`${side}UpperArm`]?.clone() ?? null,
-        forearmDirection: null,
+        elbowDirection: result.directions[upperName]?.clone() ?? null,
+        poseUpperDirection: null,
+        poseLowerDirection: null,
       };
-      if (poseVisible(pose,[wristIndex],threshold)) {
-        const imageWrist=pose.landmarks?.[0]?.[wristIndex];
-        if (imageWrist && Math.hypot((imageWrist.x-image[0].x)*anchors.aspect,imageWrist.y-image[0].y)<.12) {
-          result.armTargets[side].forearmDirection = result.directions[lowerName]?.clone() ?? null;
+      if (poseVisible(pose, [wristIndex], threshold)) {
+        const imageWrist = pose.landmarks?.[0]?.[wristIndex];
+        const distance = imageWrist
+          ? Math.hypot((imageWrist.x - image[0].x) * anchors.aspect, imageWrist.y - image[0].y)
+          : Infinity;
+        if (distance < .12) {
+          result.armTargets[side].poseUpperDirection = result.directions[upperName]?.clone() ?? null;
+          result.armTargets[side].poseLowerDirection = result.directions[lowerName]?.clone() ?? null;
         }
       }
       // Finger articulation is independent of whether the torso can be found.
@@ -230,6 +235,10 @@ export function solveBody(pose, hands, settings = {}, faceLandmarks = null) {
         }
       }
     }
+    // Sparse Pose wrist detections must never drive the forearm on their own.
+    // The corroborated copies above are consumed only by Hand-owned IK.
+    delete result.directions.leftLowerArm;
+    delete result.directions.rightLowerArm;
   }
   return result;
 }
@@ -601,15 +610,11 @@ export class BodyRetargeter {
     if (!origin || !Number.isFinite(scale) || scale <= 0) return null;
     // Fixed bind dimensions and observed foreshortening define scale. Wrist
     // placement has one render-time filter in ArmMotion, no extra scale EMA.
-    const target = origin.add(new Vector3(
+    return origin.add(new Vector3(
       (anchor.wrist.x - imageOrigin.x) * anchor.aspect * scale,
       -(anchor.wrist.y - imageOrigin.y) * scale,
       this.shoulderWidth * 0.12,
     ));
-    if (Number.isFinite(anchor.depthRatio) && left && right) {
-      target.z = (left.z + right.z) / 2 + anchor.depthRatio * this.shoulderWidth;
-    }
-    return target;
   }
 
   updateArmTarget(side, anchor, sampleTime, now, dt, settings, directions = {}) {
@@ -635,26 +640,38 @@ export class BodyRetargeter {
     let recent = this.lastArmTargets.get(side);
     if (fresh) {
       const handTarget = anchor && this.imageWristTarget(anchor, sampleTime);
-      const upperDirection = directions[upperName];
       if (handTarget) {
         if (!recent || now - recent.time > 0.4) {
           recent = { motion: new ArmMotion(wrist.clone().sub(shoulder).applyQuaternion(inverse)) };
         }
+
+        let measured = anchor?.elbowDirection ?? null;
+        if (anchor?.poseUpperDirection && anchor?.poseLowerDirection) {
+          const poseElbow = shoulder.clone().addScaledVector(anchor.poseUpperDirection, upperLength);
+          const poseWrist = poseElbow.clone().addScaledVector(anchor.poseLowerDirection, lowerLength);
+          // Hand keeps x/y authority. Pose supplies only a bounded depth cue,
+          // reconstructed from normalized segment directions and avatar lengths.
+          handTarget.z += (poseWrist.z - handTarget.z) * .6;
+          measured = poseElbow.sub(shoulder);
+        }
+
         const offset = handTarget.clone().sub(shoulder);
-        // Weak monocular depth is intentionally not borrowed from Pose. Keep the
-        // Hand image target within the physical reach in camera axes.
+        // Keep a little elbow bend even if image x/y or the depth cue asks for
+        // full extension. This avoids the straight-arm failure from raw Pose Z.
         const reach = upperLength + lowerLength;
-        const depthReach = Math.sqrt(Math.max(0, reach * reach - offset.x ** 2 - offset.y ** 2));
-        offset.z = clamp(offset.z, -depthReach, depthReach);
+        const maxReach = reach * .97;
+        const planar = Math.hypot(offset.x, offset.y);
+        if (planar > maxReach) {
+          const scale = maxReach / planar;
+          offset.x *= scale;
+          offset.y *= scale;
+          offset.z = 0;
+        } else {
+          const depthReach = Math.sqrt(Math.max(0, maxReach ** 2 - planar ** 2));
+          offset.z = clamp(offset.z, -depthReach, depthReach);
+        }
         recent.target = offset.applyQuaternion(inverse);
 
-        let measured = upperDirection ?? anchor?.elbowDirection;
-        if (anchor?.forearmDirection) {
-          // Reconstruct an elbow from the Hand-owned wrist target and only the
-          // Pose elbow->wrist DIRECTION. Pose wrist position/depth never becomes
-          // the wrist target, but its forearm line constrains the bend plane.
-          measured = handTarget.clone().addScaledVector(anchor.forearmDirection, -lowerLength).sub(shoulder);
-        }
         if (measured) {
           recent.measured = measured.clone().applyQuaternion(inverse);
           recent.measuredTime = sampleTime;
