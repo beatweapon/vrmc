@@ -140,7 +140,7 @@ export class FullBodyAvatar {
     if (!motion) {
       motion = this.bodyMotion[name] = {
         rotation: rotation.clone(), target: rotation.clone(), velocity: new Vector3(),
-        captureTime: null, interval: null, lastSeen: captureTime, liveResponse: .08,
+        captureTime: null, interval: null, lastSeen: captureTime, liveResponse: .08, pending: null,
       };
     }
     if (motion.captureTime === null || captureTime > motion.captureTime) {
@@ -151,8 +151,25 @@ export class FullBodyAvatar {
           ? bounded : motion.interval + .25 * (bounded - motion.interval);
       }
       motion.captureTime = captureTime;
-      motion.target.copy(rotation);
       motion.lastSeen = captureTime;
+
+      // Pose world-depth occasionally produces a one-sample shoulder/hip jump while
+      // the person is still. Confirm only large jumps that begin from a settled pose;
+      // continuous motion and ordinary small changes remain zero-latency.
+      const settledAngle = (name === 'torso' ? 1.5 : 1.2) * Math.PI / 180;
+      const spikeAngle = (name === 'torso' ? 4 : 3) * Math.PI / 180;
+      const settled = motion.rotation.angleTo(motion.target) <= settledAngle;
+      const jump = motion.target.angleTo(rotation);
+      if (motion.pending) {
+        // A second consecutive off-target observation confirms real movement.
+        // If it returned to the old target, the held sample was just a spike.
+        motion.target.copy(rotation);
+        motion.pending = null;
+      } else if (settled && jump > spikeAngle) {
+        motion.pending = { rotation: rotation.clone(), time: captureTime };
+      } else {
+        motion.target.copy(rotation);
+      }
     }
   }
 
