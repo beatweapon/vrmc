@@ -109,9 +109,10 @@ export class FullBodyAvatar {
       this.solveSettings = solveSettings;
     }
     const faceMotion = mirrored ? mirrorFaceMotion(frame.face) : frame.face;
-    this.rig.update(this.solution, sampleTime, now, dt, settings, faceMotion ?? null);
+    const faceTime = frame.faceTime ?? sampleTime;
+    this.rig.update(this.solution, sampleTime, now, dt, settings, faceMotion ?? null, faceTime);
     this.updateRoot(pose, sampleTime, now, dt, settings);
-    this.updateFace(frame.face, sampleTime, now, dt, mirrored);
+    this.updateFace(frame.face, faceTime, now, dt, mirrored);
     this.vrm.update(dt);
   }
 

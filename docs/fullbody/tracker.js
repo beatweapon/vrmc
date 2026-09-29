@@ -1,7 +1,8 @@
 /** Camera ownership stays with the caller; this class owns inference only. */
 export class Tracker {
-  constructor({ onResults = () => {}, onStatus = () => {}, onError = () => {} } = {}) {
+  constructor({ onResults = () => {}, onFace = () => {}, onStatus = () => {}, onError = () => {} } = {}) {
     this.onResults = onResults;
+    this.onFace = onFace;
     this.onStatus = onStatus;
     this.onError = onError;
     this._session = null;
@@ -89,6 +90,10 @@ export class Tracker {
           session.resolve = session.reject = null;
           this._notify(this.onStatus, delegate === 'GPU' ? '全身追跡中' : '全身追跡中（CPU・動きが重い場合は軽量モードを選んでください）');
           this._schedule(session, 0);
+        } else if (data.type === 'face') {
+          // This is a partial delivery, not completion: keep the inference
+          // timeout and busy flag until Pose and Hand finish the same frame.
+          this._notify(this.onFace, data.result);
         } else if (data.type === 'results') {
           clearTimeout(session.inferenceTimer);
           session.busy = false;

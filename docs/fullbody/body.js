@@ -371,10 +371,10 @@ export class BodyRetargeter {
     }
   }
 
-  apply(name, desiredWorld, sampleTime, now, dt, settings = {}, forceRest = false) {
+  apply(name, desiredWorld, sampleTime, now, dt, settings = {}, forceRest = false, direct = false) {
     const parent = this.bones[name]?.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY;
     const local = desiredWorld ? worldToLocalQuaternion(parent, desiredWorld) : null;
-    this.applyLocal(name, local, sampleTime, now, dt, settings, forceRest);
+    this.applyLocal(name, local, sampleTime, now, dt, settings, forceRest, direct);
   }
 
   applyLocal(name, desiredLocal, sampleTime, now, dt, settings = {}, forceRest = false, direct = false) {
@@ -398,7 +398,7 @@ export class BodyRetargeter {
     if (forceRest) this.last.delete(name);
   }
 
-  update(solution, sampleTime, now, dt, settings = {}, face = undefined) {
+  update(solution, sampleTime, now, dt, settings = {}, face = undefined, faceTime = sampleTime) {
     const captureTime = solution.captureTime ?? sampleTime;
     if (captureTime > (this.previousSampleTime ?? -Infinity)) {
       const interval = captureTime - this.previousSampleTime;
@@ -442,7 +442,7 @@ export class BodyRetargeter {
       this.apply(name, orientation, sampleTime, now, dt, settings);
     });
     // Establish the head's current world position before anchoring a hand to it.
-    if (face !== undefined) this.updateHead(face, sampleTime, now, dt, settings);
+    if (face !== undefined) this.updateHead(face, faceTime, now, dt, settings);
     const fallbackArms = new Set();
     for (const side of ['left', 'right']) {
       if (this.updateArmTarget(side, settings.trackHands === false ? null : solution.armTargets?.[side],
@@ -730,22 +730,63 @@ export class BodyRetargeter {
   updateHead(face, sampleTime, now, dt, settings = {}) {
     const head = this.bones.head;
     if (!head) return;
-    const valid = face?.tracked && face.head?.length === 4 && face.head.every(Number.isFinite);
-    const desired = valid ? new Quaternion().fromArray(face.head).normalize().multiply(this.rest.head.world) : null;
+    const raw = face?.headTarget;
+    const rotation = raw ?? face?.head;
+    const valid = face?.tracked && rotation?.length === 4 && rotation.every(Number.isFinite)
+      && now - sampleTime >= -.1 && now - sampleTime < .4;
+    let desired = valid ? new Quaternion().fromArray(rotation).normalize().multiply(this.rest.head.world) : null;
     const neck = this.bones.neck;
+    const neutralParent = (neck ?? head).parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY;
+    const neutralNeck = neck ? neutralParent.clone().multiply(this.rest.neck.local) : null;
+    const neutralHead = neck
+      ? neutralNeck.clone().multiply(this.rest.neck.world.clone().invert().multiply(this.rest.head.world))
+      : neutralParent.clone().multiply(this.rest.head.local);
+    if ((valid && raw) || (!valid && this.headMotion)) {
+      // One world-space head response, independent of body fps compensation.
+      // The neck/head split below is geometric, not two more delayed filters.
+      this.headMotion ??= { rotation: head.getWorldQuaternion(new Quaternion()), velocity: new Vector3(),
+        captureTime: null, interval: null };
+      const motion = this.headMotion;
+      const captureTime = Number.isFinite(face?.captureTime) ? face.captureTime : sampleTime;
+      if (valid && (motion.captureTime === null || captureTime > motion.captureTime)) {
+        const interval = motion.captureTime === null ? 0 : captureTime - motion.captureTime;
+        if (interval > 0) {
+          // Missing observations count as a bounded gap, not a fresh 80 ms
+          // start. Subsequent observations restore the measured cadence.
+          const boundedInterval = Math.min(.4, interval);
+          motion.interval = motion.interval === null || interval >= .4
+            ? boundedInterval : motion.interval + .25 * (boundedInterval - motion.interval);
+        }
+        motion.captureTime = captureTime;
+      }
+      // At sparse observations a short fixed response stops then rushes at
+      // every sample. Adjust this SAME spring to the face cadence, not body
+      // latency. 0.65 was selected with continuous-motion and lag comparisons;
+      // the 200 ms cap keeps slow/failed inference from accumulating delay.
+      motion.response = valid
+        ? Math.max(settings.faceSmoothing ?? .08, Math.min(.2, .65 * (motion.interval ?? 0))) : .45;
+      if (valid) {
+        motion.target = desired.clone();
+        motion.lastSeen = sampleTime;
+        motion.liveResponse = motion.response;
+      }
+      const holding = !valid && now - motion.lastSeen < .4;
+      dampQuaternion(motion.rotation, motion.velocity, desired ?? (holding ? motion.target : neutralHead),
+        dt, holding ? motion.liveResponse : motion.response);
+      desired = this.headMotion.rotation.clone();
+      // This is a render-time pose, including the return to neutral. Apply it
+      // directly; expiring it again would start separate neck/head springs.
+      sampleTime = now;
+    } else this.headMotion = null;
     if (neck) {
       let neckDesired = null;
       if (desired) {
-        const parent = neck.parent?.getWorldQuaternion(new Quaternion()) ?? IDENTITY;
-        const neutralNeck = parent.clone().multiply(this.rest.neck.local);
-        const relativeHead = this.rest.neck.world.clone().invert().multiply(this.rest.head.world);
-        const neutralHead = neutralNeck.clone().multiply(relativeHead);
-        const delta = desired.clone().multiply(neutralHead.invert());
+        const delta = desired.clone().multiply(neutralHead.clone().invert());
         neckDesired = IDENTITY.clone().slerp(delta, 0.35).multiply(neutralNeck);
       }
-      this.apply('neck', neckDesired, sampleTime, now, dt, settings);
+      this.apply('neck', neckDesired, sampleTime, now, dt, settings, false, true);
     }
     // Remove the current neck world orientation: total head rotation is absolute, not doubled.
-    this.apply('head', desired, sampleTime, now, dt, settings);
+    this.apply('head', desired, sampleTime, now, dt, settings, false, true);
   }
 }

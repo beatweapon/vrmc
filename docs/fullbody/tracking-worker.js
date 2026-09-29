@@ -89,6 +89,9 @@ function detect({ bitmap, timestamp, time, trackHands }) {
     // Defend the VIDEO contract even if the page clock is rounded for privacy.
     lastTimestamp = Math.max(timestamp, lastTimestamp + 1);
     const face = tasks.face.detectForVideo(bitmap, lastTimestamp);
+    // Face motion need not wait for the more expensive body/hand passes.
+    // The full packet still contains one coherent frame for arm association.
+    self.postMessage({ type: 'face', result: { face, time } });
     pose = tasks.pose.detectForVideo(bitmap, lastTimestamp);
     const result = {
       face,

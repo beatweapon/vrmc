@@ -14,6 +14,14 @@ const nearQuaternion = (actual, expected) => assert.ok(actual.angleTo(expected) 
 const reflectedQuaternion = value => new Quaternion(value.x, -value.y, -value.z, value.w);
 const native = JSON.parse(readFileSync(new URL('./fixtures/pointing-up-native.json', import.meta.url))).result;
 
+test('early raw head target reflects once without altering the original observation', () => {
+  const head = new Quaternion().setFromEuler(new Euler(.1,.2,.3));
+  const input = {head:head.toArray(),headTarget:head.toArray()};
+  const output = mirrorFaceMotion(input);
+  nearQuaternion(new Quaternion().fromArray(output.headTarget),reflectedQuaternion(head));
+  nearQuaternion(new Quaternion().fromArray(input.headTarget),head);
+});
+
 function poseFixture() {
   const points = Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0, visibility: 0 }));
   for (const [index, x, y, z = 0] of [

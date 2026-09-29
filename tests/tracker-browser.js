@@ -84,10 +84,12 @@ try {
     window.statuses = [];
     window.errors = [];
     window.count = 0;
+    window.deliveries = [];
     window.tracker = new Tracker({
       onStatus: status => statuses.push(status),
       onError: error => errors.push(error.message),
-      onResults: result => { count++; results.push(result); if (results.length > 20) results.shift(); },
+      onFace: result => deliveries.push({kind:'face',time:result.time}),
+      onResults: result => { deliveries.push({kind:'body',time:result.time}); count++; results.push(result); if (results.length > 20) results.shift(); },
     });
     window.startedAt = performance.now() / 1000;
     await tracker.start(video, { fps: 12, quality: 'balanced' });
@@ -96,6 +98,12 @@ try {
   const first = await page.evaluate(() => ({ results, errors, startedAt, now: performance.now() / 1000, statuses }));
   assert.deepEqual(first.errors, [], 'real MediaPipe inference must succeed');
   assert.ok(first.results.length >= 3);
+  const deliveries = await page.evaluate(()=>window.deliveries);
+  for (const result of first.results) {
+    const firstFace = deliveries.findIndex(item=>item.kind==='face' && item.time===result.time);
+    const fullBody = deliveries.findIndex(item=>item.kind==='body' && item.time===result.time);
+    assert.ok(firstFace>=0 && fullBody>firstFace,'the real worker must deliver each face before the full body');
+  }
   for (const result of first.results) {
     assert.equal(result.face.faceLandmarks.length, 0, 'blank frames have no face');
     assert.equal(result.pose.landmarks.length, 0, 'blank frames have no pose');

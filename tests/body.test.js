@@ -248,6 +248,41 @@ test('absolute face orientation removes torso rotation and neck+head weights do 
   }
 });
 
+test('live head has one face response regardless of body smoothing or low body capture rate', () => {
+  const simulate = bodySmoothing => {
+    const {bones,rig} = rigFixture();
+    const body = solveBody(null,null);
+    const target = new Quaternion().setFromAxisAngle(new Vector3(0,1,0),.5);
+    const face = {tracked:true,head:[0,0,0,1],headTarget:target.toArray()};
+    for(let i=0;i<6;i++) {
+      // The body packet is old; the early face packet is independently fresh.
+      rig.update(body,0,.5+i/60,1/60,{bodySmoothing,faceSmoothing:.08},face,.5);
+    }
+    return bones.head.getWorldQuaternion(new Quaternion()).angleTo(target);
+  };
+  const fast = simulate(.02), slow = simulate(.5);
+  assert.ok(Math.abs(fast-slow)<1e-7, 'body smoothing must not slow head motion');
+  // Critically damped 80 ms response at t=100 ms: remaining fraction (1+2.5)*exp(-2.5).
+  assert.ok(Math.abs(fast - .5*3.5*Math.exp(-2.5))<1e-6, `extra head lag: ${fast}`);
+});
+
+test('raw head briefly holds on empty detections then returns to torso-relative rest with or without a neck', () => {
+  for (const neck of [true, false]) {
+    const {bones,rig} = rigFixture({neck});
+    const body = solveBody(null,null);
+    body.torso = new Quaternion().setFromAxisAngle(new Vector3(0,0,1),.25);
+    const target = new Quaternion().setFromAxisAngle(new Vector3(0,1,0),.4);
+    const face = {tracked:true,headTarget:target.toArray()};
+    for(let i=0;i<=60;i++) rig.update(body,i/60,i/60,1/60,{bodySmoothing:.02},face,i/60);
+    nearQuaternion(bones.head.getWorldQuaternion(new Quaternion()),target,.001);
+    for(let i=61;i<=72;i++) rig.update(body,i/60,i/60,1/60,{}, {tracked:false},i/60);
+    nearQuaternion(bones.head.getWorldQuaternion(new Quaternion()),target,.001);
+    for(let i=73;i<300;i++) rig.update(body,i/60,i/60,1/60,{}, {tracked:false},i/60);
+    nearQuaternion(bones.head.quaternion,rig.rest.head.local,.001);
+    if(neck) nearQuaternion(bones.neck.quaternion,rig.rest.neck.local,.001);
+  }
+});
+
 test('seated mode restores leg rest pose and missing optional bones remain safe', () => {
   const { bones, rig } = rigFixture({ neck: false });
   const body = solveBody(poseFixture(), null);

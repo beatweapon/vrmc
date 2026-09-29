@@ -30,9 +30,11 @@ let controlsTimer;
 let settingsOpen = document.documentElement.classList.contains('settings-open');
 let previewAllowed = false;
 const faceSolver = new FaceSolver();
+let latestFace = null;
+function resetFace() { faceSolver.reset(); latestFace = null; }
 const trackingState = new TrackingState();
 const video = $('video');
-const tracker = new Tracker({onResults: receiveResults, onStatus: message => status(message), onError: error => { stopCamera(); status(`追跡を停止しました: ${error.message}`, true); }});
+const tracker = new Tracker({onResults: receiveResults, onFace: receiveFace, onStatus: message => status(message), onError: error => { stopCamera(); status(`追跡を停止しました: ${error.message}`, true); }});
 
 function status(message, error = false) {
   $('status').textContent = message;
@@ -114,6 +116,17 @@ function receiveResults(results) {
   }
 }
 
+function receiveFace(results) {
+  if (!running || latestFace && results.time <= latestFace.captureTime) return;
+  if (results.face) {
+    results.face.imageWidth = video.videoWidth;
+    results.face.imageHeight = video.videoHeight;
+  }
+  latestFace = {captureTime: results.time, time: performance.now()/1000,
+    face: faceSolver.update(results.face, results.time, settings, calibration.face || {})};
+  if (!frozen) frame = {...frame, face: latestFace.face, faceTime: latestFace.time};
+}
+
 function applyResults(results) {
   if (!running) return;
   if (results.face) {
@@ -131,8 +144,9 @@ function applyResults(results) {
   lastResults = observation;
   // Filters advance on camera frames only, using capture time. Freshness for
   // rendering uses receipt time: expensive inference is not tracking loss.
-  const face = faceSolver.update(observation.face, observation.captureTime, settings, calibration.face || {});
-  if (!frozen) frame = {...observation, face,
+  receiveFace(results); // Fallback for producers without early face packets; never filter twice.
+  const face = latestFace.face;
+  if (!frozen) frame = {...observation, face, faceTime: latestFace.time,
     faceLandmarks:results.face?.faceLandmarks?.[0], imageWidth:video.videoWidth, imageHeight:video.videoHeight};
   if (lastInferenceTime) trackingFps = trackingFps * .7 + .3 / Math.max(.001, results.time - lastInferenceTime);
   lastInferenceTime = results.time;
@@ -181,7 +195,17 @@ async function startCamera() {
     }});
     if (generation !== cameraGeneration) { stream.getTracks().forEach(track => track.stop()); return; }
     cameraStream = stream;
-    const actualDevice = stream.getVideoTracks()[0]?.getSettings().deviceId;
+    // Own disconnects before awaiting video playback or model initialization.
+    // Otherwise an ended track can leave startup pending or falsely go live.
+    const videoTracks = stream.getVideoTracks();
+    const disconnected = () => {
+      if (cameraStream !== stream) return;
+      stopCamera();
+      status('カメラとの接続が切れました。再度開始してください。', true);
+    };
+    videoTracks.forEach(track => track.addEventListener('ended', disconnected, {once:true}));
+    if (!videoTracks.length || videoTracks.some(track => track.readyState === 'ended')) { disconnected(); return; }
+    const actualDevice = videoTracks[0]?.getSettings().deviceId;
     if (calibration.cameraId && actualDevice && calibration.cameraId !== actualDevice) {
       calibration = {};
       for (const key of ['eyeOpenLeft','eyeOpenRight','eyeClosedLeft','eyeClosedRight']) settings[key] = DEFAULTS[key];
@@ -193,14 +217,13 @@ async function startCamera() {
     video.srcObject = stream;
     await video.play();
     if (generation !== cameraGeneration) return;
-    faceSolver.reset();
+    resetFace();
     trackingState.reset();
     frame = {face:null,pose:null,hands:null,time:0};
     lastResults = null;
     await tracker.start(video, {fps:settings.fps, trackHands:settings.trackHands, quality:settings.quality});
     if (generation !== cameraGeneration) return;
     running = true;
-    stream.getVideoTracks().forEach(track => track.addEventListener('ended', () => { if (cameraStream === stream) { stopCamera(); status('カメラとの接続が切れました。再度開始してください。', true); } }));
     await enumerateCameras();
     if (generation !== cameraGeneration) return;
     status('追跡中です。頭からつま先まで映し、正面の姿勢と目の開閉を記録してください。');
@@ -228,7 +251,7 @@ function stopCamera() {
   lastInferenceTime = 0;
   trackingFps = 0;
   cancelCalibration();
-  faceSolver.reset();
+  resetFace();
   trackingState.reset();
   if (!frozen) frame = {face:null,pose:null,hands:null,time:0};
   $('fps').textContent = '— fps';
@@ -322,7 +345,7 @@ function calibrationTick(now) {
     calibration.cameraId = cameraStream?.getVideoTracks()[0]?.getSettings().deviceId || settings.cameraId;
     calibration.updatedAt = new Date().toISOString();
     settings = sanitizeSettings(settings);
-    faceSolver.reset();
+    resetFace();
     syncSettings();
     persist();
     sendState();
@@ -396,7 +419,9 @@ function outputMode() {
       } catch (error) { console.error('配信用モデルの読み込みに失敗しました', error); }
     } else if (message.type==='frame') {
       // performance.now() has a different origin in a popup; translate its capture age.
-      frame = {...message.frame, time:performance.now()/1000 - Math.max(0,message.age || 0)};
+      const now = performance.now()/1000;
+      frame = {...message.frame, time:now - Math.max(0,message.age || 0),
+        faceTime:now - Math.max(0,message.faceAge ?? message.age ?? 0)};
     } else if (message.type==='view') { pendingView=message.view; viewer.setView(message.view); }
   });
   window.opener.postMessage({vrmc:'fullbody',type:'ready'}, origin);
@@ -409,7 +434,8 @@ function animate(now) {
   if (!isOutput) {
     calibrationTick(now);
     if (popup && !popup.closed && now-(animate.lastPost||0)>=1000/30) {
-      post({type:'frame',frame,age:Math.max(0,now/1000-frame.time)});
+      post({type:'frame',frame,age:Math.max(0,now/1000-frame.time),
+        faceAge:Math.max(0,now/1000-(frame.faceTime ?? frame.time))});
       animate.lastPost=now;
     }
   }
@@ -424,7 +450,7 @@ function animate(now) {
 }
 
 async function init() {
-  $('build-version').textContent = 'Full Body · 2026.09.28.1';
+  $('build-version').textContent = 'Full Body · 2026.09.29.2';
   try {
     viewer = new Viewer($('stage'), {interactive:!isOutput, onViewChange:view=>post({type:'view',view})});
     viewer.setDisplay(settings);
@@ -465,7 +491,7 @@ async function init() {
     $('freeze').onclick = () => {
       frozen=!frozen;
       if (frozen) cancelCalibration();
-      else { faceSolver.reset(); frame={face:null,pose:null,hands:null,time:0}; }
+      else { resetFace(); frame={face:null,pose:null,hands:null,time:0}; }
       cameraButtons(); sendState();
     };
     $('fit').onclick = () => viewer.fit();
@@ -485,7 +511,7 @@ async function init() {
       resetPreview();
       cancelCalibration(); calibration={};
       settings={...DEFAULTS,cameraId:settings.cameraId,background:settings.background,backgroundColor:settings.backgroundColor};
-      faceSolver.reset(); viewer.avatar?.setCalibration(null); syncSettings(); persist(); sendState(); cameraButtons();
+      resetFace(); viewer.avatar?.setCalibration(null); syncSettings(); persist(); sendState(); cameraButtons();
       tracker.setOptions({fps:settings.fps,trackHands:settings.trackHands});
       $('calibration-state').textContent='未調整 · 初期値に戻しました'; status('動き・表情・キャリブレーションを初期値に戻しました。');
     };

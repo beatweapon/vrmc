@@ -13,6 +13,36 @@ try {
     executablePath:process.env.CHROME_PATH || (process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined),
     args:['--enable-unsafe-swiftshader','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
   const context=await browser.newContext({viewport:{width:1440,height:1000},permissions:['camera'],serviceWorkers:'block'});
+  // Optional isolation for hosts where Chrome's fake capture device ends its
+  // stream unexpectedly. Keep the default getUserMedia path and report which
+  // source was tested; this mode does not validate device permission/startup.
+  await context.addInitScript(synthetic=>{
+    const capture=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    window.testCameraEvents=[];
+    navigator.mediaDevices.getUserMedia=async constraints=>{
+      const log=(event,extra={})=>testCameraEvents.push({event,time:performance.now()/1000,...extra});
+      log('request');
+      if(!synthetic) {
+        try {
+          const stream=await capture(constraints);
+          log('acquired');
+          for(const track of stream.getVideoTracks()) for(const event of ['ended','mute','unmute'])
+            track.addEventListener(event,()=>log(event,{state:track.readyState}));
+          return stream;
+        }catch(error){log('error',{name:error.name,message:error.message});throw error;}
+      }
+      const canvas=document.createElement('canvas');canvas.width=1280;canvas.height=720;
+      const context=canvas.getContext('2d');let frame=0;
+      const paint=()=>{context.fillStyle=++frame%2?'#26323c':'#27333d';context.fillRect(0,0,1280,720);};
+      paint();
+      const stream=canvas.captureStream(30),timer=setInterval(()=>{
+        if(stream.getTracks().every(track=>track.readyState==='ended')) clearInterval(timer);
+        else paint();
+      },33);
+      return stream;
+    };
+  },process.env.VRMC_TEST_CAMERA==='canvas');
+  console.log('UI test video source:',process.env.VRMC_TEST_CAMERA==='canvas'?'synthetic canvas (no device startup coverage)':'Chrome fake camera');
   // Test-only access to the displayed rig, so assertions measure the loaded
   // model's actual hand positions after the complete app/detector path.
   const viewerSource=await readFile(new URL('../docs/fullbody/viewer.js',import.meta.url),'utf8');
@@ -38,7 +68,9 @@ try {
           window.testBeforeDetectorTick?.();
           const face=window.testFace?{...testFace,faceLandmarks:nativePoints(testFace.faceLandmarks)}:null;
           const hands=window.testHands?{...testHands,landmarks:nativePoints(testHands.landmarks),worldLandmarks:nativePoints(testHands.worldLandmarks)}:null;
-          this.callbacks.onResults({face,pose:window.testPose||null,hands,time:performance.now()/1000-(window.testLatency||0)});
+          const result={face,pose:window.testPose||null,hands,time:performance.now()/1000-(window.testLatency||0)};
+          this.callbacks.onFace?.(result);
+          if(!window.testFaceOnly) this.callbacks.onResults(result);
           this.timer=setTimeout(tick,window.testInterval||40);
         };
         this.timer=setTimeout(tick,40);
@@ -260,6 +292,26 @@ try {
   assert.equal(await page.locator('#expression-support').isVisible(),false,'sample has all requested expression presets');
   await page.evaluate(()=>setFacePose());
   await page.locator('[data-setting="mirrorAvatar"]').uncheck();
+  // A face packet alone must move the rendered head before the matching body
+  // packet exists. Keep body sequence fixed to catch accidental full-frame waits.
+  await page.evaluate(async()=>{
+    const {Matrix4,Euler,Quaternion}=await import('three');
+    window.testFaceOnly=true;
+    window.testBodySequence=testTrackingState.frame.sequence;
+    window.testEarlyHeadBefore=testViewer.avatar.vrm.humanoid.getRawBoneNode('head').getWorldQuaternion(new Quaternion()).toArray();
+    window.testHeadMatrixBefore=[...testFace.facialTransformationMatrixes[0].data];
+    testFace.facialTransformationMatrixes[0].data=new Matrix4().makeRotationFromEuler(new Euler(0,0,.3)).toArray();
+  });
+  try {
+    await page.waitForFunction(async()=>{
+      const {Quaternion}=await import('three');
+      const head=testViewer.avatar.vrm.humanoid.getRawBoneNode('head').getWorldQuaternion(new Quaternion());
+      return head.angleTo(new Quaternion().fromArray(testEarlyHeadBefore))>.12;
+    },null,{timeout:3000});
+    assert.equal(await page.evaluate(()=>testTrackingState.frame.sequence),await page.evaluate(()=>testBodySequence));
+  } finally {
+    await page.evaluate(()=>{testFaceOnly=false;testFace.facialTransformationMatrixes[0].data=testHeadMatrixBefore;});
+  }
   // Face and hands are visible, but neither shoulders nor elbows are in frame.
   // Before wrist IK this rotated the palms down beside the avatar's waist.
   await page.evaluate(()=>{
@@ -481,7 +533,8 @@ try {
         const height=name=>{const node=avatar.vrm.humanoid.getRawBoneNode(name);return node.getWorldPosition(node.position.clone()).y;};
         return {targets:Object.fromEntries([...avatar.rig.lastArmTargets].map(([side,state])=>[side,{source:state.source,id:state.physicalId}])),
           hands:Object.keys(avatar.solution.hands),anchors:Object.keys(avatar.solution.armTargets),
-          pending:testTrackingState.frame.hands,tracks:Object.fromEntries(Object.entries(testTrackingState.tracks).map(([side,state])=>[side,
+          status:document.getElementById('status').textContent,
+          pending:testTrackingState.frame?.hands,tracks:Object.fromEntries(Object.entries(testTrackingState.tracks).map(([side,state])=>[side,
             {id:state.id,seenAt:state.seenAt,confirmed:state.confirmed,acquisition:state.acquisition,conflict:state.identityConflict}])),
           heights:['chest','leftHand','rightHand'].map(name=>[name,height(name)])};
       });
@@ -701,7 +754,8 @@ try {
   const standalone=await context.newPage();
   standalone.on('pageerror',error=>errors.push(error.message));
   await standalone.goto(`${origin}/fullbody/?output=1`);
-  await standalone.waitForFunction(()=>document.getElementById('connection').dataset.live==='true');
+  try { await standalone.waitForFunction(()=>document.getElementById('connection').dataset.live==='true'); }
+  catch(error) { throw new Error('Standalone startup: '+await standalone.locator('#status').textContent(),{cause:error}); }
   assert.equal(await standalone.evaluate(()=>window.opener),null);
   assert.equal(await standalone.evaluate(()=>testTrackerStarts),1);
   assert.equal(await standalone.locator('#model-name').textContent(),'saved-avatar.vrm');
@@ -710,6 +764,14 @@ try {
   await standalone.close();
   assert.deepEqual(errors,[]);
   console.log('Browser UI: direct-URL autostart, clean capture/idle controls, preview approval/cancel/Escape/reset, authored model/PNG orientation, saved model/settings, invalid VRM recovery, calibration, 4fps + 220ms delay, stationary wrists, cropped torso, fist/V fingers, complete palm turnover, hand identity/acquisition/motion mirror, expression mesh and five vowels, frozen popup/standalone output, stop/reset and mobile layout passed.');
+} catch(error) {
+  for(const context of browser?.contexts()??[]) for(const page of context.pages()) {
+    try { console.error('UI camera diagnostics:',await page.evaluate(()=>({
+      status:document.getElementById('status')?.textContent,events:window.testCameraEvents,
+      videoTime:document.getElementById('video')?.currentTime,
+    }))); } catch {}
+  }
+  throw error;
 } finally {
   await browser?.close();
   await new Promise(resolve=>server.close(resolve));

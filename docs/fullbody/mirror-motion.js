@@ -49,6 +49,7 @@ export function mirrorFaceMotion(face) {
   // Reflection across X: R' = S R S. Quaternion axial components become
   // (x, -y, -z, w), preserving nods while reversing yaw and lateral tilt.
   if (face.head?.length === 4) result.head = [face.head[0], -face.head[1], -face.head[2], face.head[3]];
+  if (face.headTarget?.length === 4) result.headTarget = [face.headTarget[0], -face.headTarget[1], -face.headTarget[2], face.headTarget[3]];
   if (face.gaze) result.gaze = { ...face.gaze, yaw: -face.gaze.yaw };
   if (face.expressions) result.expressions = { ...face.expressions,
     blinkLeft: face.expressions.blinkRight, blinkRight: face.expressions.blinkLeft };

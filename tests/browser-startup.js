@@ -33,13 +33,13 @@ try {
     args: ['--enable-unsafe-swiftshader', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
   });
 
-  async function newContext({ denyFirst = false, holdTracker = false } = {}) {
+  async function newContext({ denyFirst = false, holdTracker = false, syntheticCamera = false, endedOnArrival = false } = {}) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 },
       permissions: ['camera'], serviceWorkers: 'block' });
     await context.route('**/fullbody/tracker.js', route => route.fulfill({
       contentType: 'text/javascript', body: trackerStub,
     }));
-    await context.addInitScript(({ denyFirst, holdTracker }) => {
+    await context.addInitScript(({ denyFirst, holdTracker, syntheticCamera, endedOnArrival }) => {
       window.testCameraRequests = 0;
       window.testTrackerStarts = 0;
       window.testStreams = [];
@@ -50,14 +50,67 @@ try {
         if (denyFirst && window.testCameraRequests === 1) {
           throw new DOMException('Permission denied for test', 'NotAllowedError');
         }
-        const stream = await capture(constraints);
+        let stream;
+        if(syntheticCamera) {
+          const canvas=document.createElement('canvas');canvas.width=640;canvas.height=480;
+          const ctx=canvas.getContext('2d');let frame=0;
+          stream=canvas.captureStream(30);
+          const timer=setInterval(()=>{
+            if(stream.getTracks().every(track=>track.readyState==='ended')) clearInterval(timer);
+            else {ctx.fillStyle=++frame%2?'#26323c':'#27333d';ctx.fillRect(0,0,640,480);}
+          },33);
+        } else stream = await capture(constraints);
         window.testStreams.push(stream);
+        if(endedOnArrival) stream.getTracks().forEach(track=>track.stop());
         return stream;
       };
-    }, { denyFirst, holdTracker });
+    }, { denyFirst, holdTracker, syntheticCamera, endedOnArrival });
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
     return { context, page };
+  }
+
+  // Deliver a deterministic device-ended event while model initialization is
+  // still pending. A track.stop() alone does not dispatch a native ended event.
+  {
+    const {context,page}=await newContext({holdTracker:true,syntheticCamera:true});
+    try {
+      await page.goto(`${origin}/fullbody/`);
+      await page.waitForFunction(()=>testTrackerStarts===1);
+      await page.evaluate(()=>{
+        const track=testStreams[0].getVideoTracks()[0];
+        track.stop();track.dispatchEvent(new Event('ended'));
+      });
+      await page.waitForFunction(()=>document.getElementById('stage-status').textContent.includes('接続が切れました'),null,{timeout:3000});
+      assert.equal(await page.locator('#connection').getAttribute('data-live'),'false');
+      assert.equal(await page.locator('#stage-camera').isEnabled(),true);
+      assert.equal(await page.locator('#camera-preview').isVisible(),false);
+      assert.equal(await page.evaluate(()=>document.getElementById('video').srcObject),null);
+      await page.evaluate(()=>{testHoldTracker=false;});
+      await page.locator('#stage-camera').click();
+      await page.waitForFunction(()=>document.getElementById('connection').dataset.live==='true');
+      assert.equal(await page.evaluate(()=>testCameraRequests),2);
+      await page.evaluate(()=>testStreams[0].getVideoTracks()[0].dispatchEvent(new Event('ended')));
+      assert.equal(await page.locator('#connection').getAttribute('data-live'),'true','an old stream must not stop the new session');
+      assert.equal(await page.locator('#preview-toggle').isChecked(),false);
+      await page.evaluate(()=>{
+        const track=testStreams[1].getVideoTracks()[0];track.stop();track.dispatchEvent(new Event('ended'));
+      });
+      assert.equal(await page.locator('#connection').getAttribute('data-live'),'false','disconnects after startup remain handled');
+      assert.equal(await page.locator('#stage-camera').isEnabled(),true);
+    }finally{await context.close();}
+  }
+
+  // An already-ended stream has no future ended event to subscribe to.
+  {
+    const {context,page}=await newContext({syntheticCamera:true,endedOnArrival:true});
+    try {
+      await page.goto(`${origin}/fullbody/`);
+      await page.waitForFunction(()=>document.getElementById('stage-status').textContent.includes('接続が切れました'),null,{timeout:3000});
+      assert.equal(await page.evaluate(()=>testTrackerStarts),0);
+      assert.equal(await page.evaluate(()=>document.getElementById('video').srcObject),null);
+      assert.equal(await page.locator('#stage-camera').isEnabled(),true);
+    }finally{await context.close();}
   }
 
   // The user can enter settings before the model finishes loading. A manual
@@ -127,7 +180,7 @@ try {
     } finally { await context.close(); }
   }
   assert.deepEqual(errors, []);
-  console.log('Browser startup: cancellation during delayed model load is respected; permission denial and retry recover from the direct URL without exposing the camera preview.');
+  console.log('Browser startup: early/late device-ended events, already-ended streams, retry and stale-event isolation passed with synthetic streams; model-load cancellation and permission denial/retry passed with the Chrome fake camera. Preview remains hidden.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

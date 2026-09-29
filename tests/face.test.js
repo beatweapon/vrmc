@@ -154,6 +154,16 @@ test('head filter has equal response at 30 and 60 fps', () => {
   close(simulate(30).angleTo(simulate(60)), 0);
 });
 
+test('render head target retains calibrated motion before capture-time smoothing', () => {
+  const solver = new FaceSolver();
+  solver.update(result({head:qFor()}),0,{});
+  const desired = qFor(10,20,25);
+  const output = solver.update(result({head:desired}),1/60,{faceSmoothing:.3});
+  close(new Quaternion().fromArray(output.headTarget).angleTo(desired),0);
+  assert.ok(new Quaternion().fromArray(output.head).angleTo(desired)>.1);
+  assert.equal(solver.update(null,.1,{}).headTarget,null);
+});
+
 test('tracking loss briefly holds pose, then eases to neutral and reset clears it', () => {
   const solver = new FaceSolver();
   const initial = solver.update(result({ head: qFor(0, 20, 10), shapes: { jawOpen: .6 } }), 0, immediate);

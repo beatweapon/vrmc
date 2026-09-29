@@ -343,10 +343,12 @@ export class FaceSolver {
     const measurement = measureFace(result);
     const tracked = measurement !== null;
     const smoothing = setting(settings, 'faceSmoothing', 0, .5);
+    let headTarget = null;
     if (tracked) {
       this.lastSeen = now;
       this.metrics = { leftEyeOpen: measurement.leftEyeOpen, rightEyeOpen: measurement.rightEyeOpen };
       const target = targetHead(measurement, calibration, setting(settings, 'headStrength', 0, 2));
+      headTarget = target.toArray();
       const expressions = expressionTargets(measurement, settings, calibration);
       const closed = Math.max(expressions.blinkLeft, expressions.blinkRight) > .35;
       if (closed) this.gazeHoldUntil = now + setting(settings, 'blinkHoldMs', 0, 500) / 1000;
@@ -378,7 +380,7 @@ export class FaceSolver {
       this.gazeHoldUntil = -Infinity;
     }
     return {
-      tracked, head: this.head.toArray(), gaze: { ...this.gaze },
+      tracked, head: this.head.toArray(), headTarget, captureTime: now, gaze: { ...this.gaze },
       expressions: { ...this.expressions }, metrics: { ...this.metrics }, measurement,
     };
   }
