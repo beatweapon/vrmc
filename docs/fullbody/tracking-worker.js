@@ -73,15 +73,14 @@ async function initialize({ delegate, quality }) {
   self.postMessage({ type: 'ready', delegate });
 }
 
-function disablePoseHandLandmarks(pose, enabled) {
+function disablePoseFingerLandmarks(pose, enabled) {
   if (!enabled) return;
-  // When Hand tracking is enabled, HandLandmarker exclusively owns wrist
-  // position, palm orientation and fingers. Pose remains useful through the
-  // elbow, but its wrist/thumb/index/little landmarks are too prone to
-  // background hallucinations and unstable monocular depth to drive the arm.
+  // HandLandmarker exclusively owns palm/finger articulation. Keep only Pose's
+  // wrist (15/16) so elbow->wrist direction can stabilize the arm bend plane;
+  // it is never used as a wrist position target by the retargeter.
   for (const collection of [pose.landmarks?.[0], pose.worldLandmarks?.[0]]) {
     if (!collection) continue;
-    for (const index of [15, 16, 17, 18, 19, 20, 21, 22]) {
+    for (const index of [17, 18, 19, 20, 21, 22]) {
       const point = collection[index];
       if (!point) continue;
       point.visibility = 0;
@@ -103,7 +102,7 @@ function detect({ bitmap, timestamp, time, trackHands }) {
     // own independent capture cadence in a follow-up change.
     const hands = trackHands ? tasks.hands.detectForVideo(bitmap, lastTimestamp) : null;
     pose = tasks.pose.detectForVideo(bitmap, lastTimestamp);
-    disablePoseHandLandmarks(pose, trackHands);
+    disablePoseFingerLandmarks(pose, trackHands);
     const result = {
       // Only clone serializable data; segmentation is deliberately disabled.
       pose: { landmarks: pose.landmarks, worldLandmarks: pose.worldLandmarks },
