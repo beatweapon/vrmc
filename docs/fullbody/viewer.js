@@ -28,6 +28,8 @@ export class Viewer {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(stage);
     this.generation = 0;
+    this.backgroundTexture = null;
+    this.backgroundBitmap = null;
     this.resize();
   }
   resize() {
@@ -46,9 +48,35 @@ export class Viewer {
       if (id !== this.generation) { next.dispose(); return false; }
       this.avatar?.dispose();
       this.avatar = next;
-      this.fit();
+      this.fitBust();
       return true;
     } finally { if (file) URL.revokeObjectURL(url); }
+  }
+  fitBust() {
+    if (!this.avatar) return;
+    this.avatar.vrm.update(0);
+    this.scene.updateMatrixWorld(true);
+    const vrm = this.avatar.vrm;
+    const bounds = new THREE.Box3().setFromObject(vrm.scene, true);
+    const center = bounds.getCenter(new THREE.Vector3());
+    const humanoid = vrm.humanoid;
+    const chestNode = humanoid.getRawBoneNode('upperChest') || humanoid.getRawBoneNode('chest');
+    const leftShoulder = humanoid.getRawBoneNode('leftShoulder');
+    const rightShoulder = humanoid.getRawBoneNode('rightShoulder');
+    const chest = chestNode?.getWorldPosition(new THREE.Vector3()) || new THREE.Vector3(center.x, bounds.min.y + (bounds.max.y-bounds.min.y)*.58, center.z);
+    const left = leftShoulder?.getWorldPosition(new THREE.Vector3());
+    const right = rightShoulder?.getWorldPosition(new THREE.Vector3());
+    const top = bounds.max.y;
+    const visibleHeight = Math.max(.28, top - chest.y);
+    const shoulderWidth = left && right ? left.distanceTo(right) : Math.max(.3, visibleHeight*.8);
+    const tangent = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    const verticalDistance = visibleHeight / (2*tangent) * 1.25;
+    const horizontalDistance = shoulderWidth / (2*tangent*Math.max(.35,this.camera.aspect)) * 1.35;
+    const distance = Math.max(verticalDistance, horizontalDistance) + Math.max(.05, bounds.getSize(new THREE.Vector3()).z*.35);
+    const target = new THREE.Vector3(chest.x, chest.y + visibleHeight*.53, chest.z);
+    this.controls.target.copy(target);
+    this.camera.position.copy(target).add(new THREE.Vector3(0, 0, distance));
+    this.controls.update();
   }
   fit() {
     if (!this.avatar) return;
@@ -87,8 +115,27 @@ export class Viewer {
     vrm.update(0);
   }
   setDisplay(settings) {
+    if (settings.background === 'image') {
+      this.scene.background = this.backgroundTexture;
+      return;
+    }
     this.scene.background = settings.background === 'transparent' ? null : new THREE.Color(
       settings.background === 'green' ? '#00ff00' : settings.background === 'blue' ? '#0000ff' : settings.backgroundColor);
+  }
+  async setBackgroundImage(file, settings) {
+    this.backgroundTexture?.dispose();
+    this.backgroundBitmap?.close?.();
+    this.backgroundTexture = null;
+    this.backgroundBitmap = null;
+    if (file) {
+      const bitmap = await createImageBitmap(file);
+      const texture = new THREE.Texture(bitmap);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      this.backgroundBitmap = bitmap;
+      this.backgroundTexture = texture;
+    }
+    this.setDisplay(settings);
   }
   render(frame, delta, settings, frozen) {
     if (!frozen) this.avatar?.update(frame, delta, settings);
@@ -110,6 +157,8 @@ export class Viewer {
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.avatar?.dispose();
+    this.backgroundTexture?.dispose();
+    this.backgroundBitmap?.close?.();
     this.renderer.dispose();
   }
 }
