@@ -77,7 +77,7 @@ function disablePoseFingerLandmarks(pose, enabled) {
   if (!enabled) return;
   // HandLandmarker exclusively owns palm/finger articulation. Keep only Pose's
   // wrist (15/16) so elbow->wrist direction can stabilize the arm bend plane;
-  // it is never used as a wrist position target by the retargeter.
+  // body.js never uses that Pose wrist as an absolute wrist position target.
   for (const collection of [pose.landmarks?.[0], pose.worldLandmarks?.[0]]) {
     if (!collection) continue;
     for (const index of [17, 18, 19, 20, 21, 22]) {
