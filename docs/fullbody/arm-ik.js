@@ -118,9 +118,11 @@ export class ArmMotion {
     }
     const axis = wrist.clone().sub(shoulder).normalize();
     if (axis.lengthSq() < 0.5) axis.copy(this.axis ?? new Vector3(0, -1, 0));
-    // With no measured elbow, prefer a relaxed lower/outward elbow on the
-    // camera-facing side. Positive z is toward the camera in this torso frame.
-    const defaultPole = new Vector3(side === 'left' ? 0.15 : -0.15, -1, 0.25);
+    // With no measured elbow, prefer a relaxed lower/outward elbow. Torso
+    // clearance supplies the necessary outward correction, not a raised wing.
+    // The elbow trails a forward-lifting wrist. A positive z pole puts the
+    // elbow in front of it at acquisition and lifts the upper arm first.
+    const defaultPole = new Vector3(side === 'left' ? 0.15 : -0.15, -1, -0.25);
     const preferred = project(defaultPole, axis);
     const observed = measuredElbow && project(measuredElbow, axis);
     const hint = observed && observed.lengthSq() > .04 ? measuredElbow : defaultPole;
