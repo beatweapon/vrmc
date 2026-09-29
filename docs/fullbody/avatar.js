@@ -5,14 +5,10 @@ import {
   BodyRetargeter, TRACKED_BONES, calibrateBody, rootOffset, smoothingAlpha, solveBody, validateBodyCalibration,
 } from './body.js';
 import { mirrorBodyInput, mirrorFaceMotion } from './mirror-motion.js';
-import { dampVector } from './motion.js';
+import { dampQuaternion, dampVector } from './motion.js';
 
 const EXPRESSION_NAMES = ['blink', 'blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh', 'happy', 'angry', 'sad', 'relaxed', 'surprised'];
 const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
-const BODY_FILTER = Object.freeze({
-  hips: { quiet: 0.6 * Math.PI / 180, responsive: 7 * Math.PI / 180, minAlpha: 0.10 },
-  torso: { quiet: 0.8 * Math.PI / 180, responsive: 8 * Math.PI / 180, minAlpha: 0.08 },
-});
 const finiteQuaternion = value => Array.isArray(value) && value.length === 4 && value.every(Number.isFinite);
 const posePoint = point => point && [point.x, point.y, point.z].every(Number.isFinite)
   ? new Vector3(point.x, -point.y, -point.z) : null;
@@ -86,7 +82,7 @@ export class FullBodyAvatar {
     this.rootTime = -Infinity;
     this.calibration = null;
     this.bodyNeutral = {};
-    this.bodyRotationHold = {};
+    this.bodyMotion = {};
     this.lastExpressions = {};
     this.lastGaze = { yaw: 0, pitch: 0 };
     this.lastFaceTime = -Infinity;
@@ -122,7 +118,7 @@ export class FullBodyAvatar {
   setCalibration(calibration) {
     this.calibration = validateBodyCalibration(calibration) ? { ...calibration } : null;
     this.bodyNeutral = {};
-    this.bodyRotationHold = {};
+    this.bodyMotion = {};
     this.root.set(0, 0, 0);
     this.rootVelocity?.set(0, 0, 0);
     this.rootTarget.set(0, 0, 0);
@@ -138,28 +134,47 @@ export class FullBodyAvatar {
     return this.bodyNeutral[key] ?? null;
   }
 
-  stabilizeRotation(name, rotation) {
-    if (!rotation) return null;
-    const previous = this.bodyRotationHold[name];
-    if (!previous) {
-      this.bodyRotationHold[name] = rotation.clone();
-      return rotation;
+  observeBodyRotation(name, rotation, captureTime) {
+    if (!rotation) return;
+    let motion = this.bodyMotion[name];
+    if (!motion) {
+      motion = this.bodyMotion[name] = {
+        rotation: rotation.clone(), target: rotation.clone(), velocity: new Vector3(),
+        captureTime: null, interval: null, lastSeen: captureTime, liveResponse: .08,
+      };
     }
-    const { quiet, responsive, minAlpha } = BODY_FILTER[name];
-    const angle = previous.angleTo(rotation);
-    const motion = Math.max(0, Math.min(1, (angle - quiet) / Math.max(1e-6, responsive - quiet)));
-    const alpha = minAlpha + (1 - minAlpha) * motion * motion * (3 - 2 * motion);
-    previous.slerp(rotation, alpha).normalize();
-    return previous.clone();
+    if (motion.captureTime === null || captureTime > motion.captureTime) {
+      const interval = motion.captureTime === null ? 0 : captureTime - motion.captureTime;
+      if (interval > 0) {
+        const bounded = Math.min(.4, interval);
+        motion.interval = motion.interval === null || interval >= .4
+          ? bounded : motion.interval + .25 * (bounded - motion.interval);
+      }
+      motion.captureTime = captureTime;
+      motion.target.copy(rotation);
+      motion.lastSeen = captureTime;
+    }
   }
 
-  prepareBodySolution(solution, mirrored) {
+  bodyRotation(name, now, dt, settings) {
+    const motion = this.bodyMotion[name];
+    if (!motion) return null;
+    const holding = now - motion.lastSeen < .4;
+    const base = Math.max(.045, Math.min(.16, (settings.bodySmoothing ?? .12) * .65));
+    const cadence = Math.min(.18, .65 * (motion.interval ?? 0));
+    motion.liveResponse = Math.max(base, cadence);
+    const target = holding ? motion.target : new Quaternion();
+    dampQuaternion(motion.rotation, motion.velocity, target, dt, holding ? motion.liveResponse : .35);
+    return motion.rotation.clone();
+  }
+
+  prepareBodySolution(solution, mirrored, captureTime) {
     for (const name of ['hips', 'torso']) {
       const measured = solution[name];
       if (!measured) continue;
       const neutral = this.neutralRotation(name, mirrored, measured);
       const relative = neutral ? measured.clone().multiply(neutral.clone().invert()).normalize() : measured.clone();
-      solution[name] = this.stabilizeRotation(name, relative);
+      this.observeBodyRotation(name, relative, captureTime);
     }
     return solution;
   }
@@ -175,26 +190,34 @@ export class FullBodyAvatar {
     const pose = {...frame.pose, imageWidth:frame.pose?.imageWidth ?? frame.imageWidth,
       imageHeight:frame.pose?.imageHeight ?? frame.imageHeight};
     const sequence = frame.sequence ?? sampleTime;
+    const captureTime = frame.captureTime ?? frame.sampleTime ?? sampleTime;
     const mirrored = settings.mirrorAvatar === true;
     if (this.mirrored !== undefined && this.mirrored !== mirrored) {
       for (const side of ['left', 'right']) this.rig.releaseArm(side, now);
       this.rig.imageReference = {};
       this.bodyNeutral = {};
-      this.bodyRotationHold = {};
+      this.bodyMotion = {};
     }
     this.mirrored = mirrored;
     const solveSettings = `${settings.minVisibility}/${settings.seated}/${settings.trackHands}/${mirrored}`;
     if (!this.solution || this.solutionSequence !== sequence || this.solveSettings !== solveSettings) {
       const input = mirrored ? mirrorBodyInput(pose, frame.hands, frame.faceLandmarks)
         : { pose, hands: frame.hands, faceLandmarks: frame.faceLandmarks };
-      this.solution = this.prepareBodySolution(solveBody(input.pose, input.hands, settings, input.faceLandmarks), mirrored);
-      this.solution.captureTime = frame.captureTime ?? frame.sampleTime ?? sampleTime;
+      this.solution = this.prepareBodySolution(solveBody(input.pose, input.hands, settings, input.faceLandmarks), mirrored, captureTime);
+      this.solution.captureTime = captureTime;
       this.solutionSequence = sequence;
       this.solveSettings = solveSettings;
     }
+    // Pose inference only updates targets. Render-time motion advances every frame,
+    // just like headMotion, so sparse body inference never appears as pose steps.
+    const renderedSolution = {
+      ...this.solution,
+      hips: this.bodyRotation('hips', now, dt, settings),
+      torso: this.bodyRotation('torso', now, dt, settings),
+    };
     const faceMotion = mirrored ? mirrorFaceMotion(frame.face) : frame.face;
     const faceTime = frame.faceTime ?? sampleTime;
-    this.rig.update(this.solution, sampleTime, now, dt, settings, faceMotion ?? null, faceTime);
+    this.rig.update(renderedSolution, sampleTime, now, dt, settings, faceMotion ?? null, faceTime);
     this.updateRoot(pose, sampleTime, now, dt, settings);
     this.updateFace(frame.face, faceTime, now, dt, mirrored);
     this.vrm.update(dt);
