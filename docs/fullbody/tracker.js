@@ -19,6 +19,7 @@ export class Tracker {
     const now = performance.now();
     const session = {
       video,
+      keepAliveVideo: null,
       fps: normalizeFps(fps),
       trackHands: Boolean(trackHands),
       quality: ['light', 'lite', 'performance'].includes(quality) ? 'light' : 'balanced',
@@ -49,6 +50,7 @@ export class Tracker {
       },
     };
     this._session = session;
+    this._createKeepAliveVideo(session);
     return new Promise((resolve, reject) => {
       session.resolve = resolve;
       session.reject = reject;
@@ -74,9 +76,39 @@ export class Tracker {
     clearTimeout(session.startupTimer);
     clearTimeout(session.inferenceTimer);
     this._terminateWorker(session);
+    if (session.keepAliveVideo) {
+      session.keepAliveVideo.pause();
+      session.keepAliveVideo.srcObject = null;
+      session.keepAliveVideo.remove();
+      session.keepAliveVideo = null;
+    }
     session.video = null;
     session.reject?.(new DOMException('追跡の開始をキャンセルしました。', 'AbortError'));
     session.resolve = session.reject = null;
+  }
+
+  _createKeepAliveVideo(session) {
+    const stream = session.video?.srcObject;
+    if (!(stream instanceof MediaStream) || typeof document === 'undefined') return;
+    const keepAlive = document.createElement('video');
+    keepAlive.autoplay = true;
+    keepAlive.muted = true;
+    keepAlive.playsInline = true;
+    keepAlive.setAttribute('aria-hidden', 'true');
+    Object.assign(keepAlive.style, {
+      position: 'fixed',
+      left: '0',
+      top: '0',
+      width: '2px',
+      height: '2px',
+      opacity: '0.01',
+      pointerEvents: 'none',
+      zIndex: '2147483647',
+    });
+    keepAlive.srcObject = stream;
+    document.body.appendChild(keepAlive);
+    keepAlive.play().catch(() => {});
+    session.keepAliveVideo = keepAlive;
   }
 
   _launchWorker(session, delegate) {
