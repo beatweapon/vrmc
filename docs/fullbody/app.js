@@ -464,7 +464,7 @@ function animate(now) {
 }
 
 async function init() {
-  $('build-version').textContent = 'Full Body · 2026.09.30.1';
+  $('build-version').textContent = 'Full Body · 2026.09.30.2';
   try {
     viewer = new Viewer($('stage'), {interactive:!isOutput, onViewChange:view=>post({type:'view',view})});
     try { backgroundFile = await backgroundStore(); } catch { /* Background images are optional. */ }

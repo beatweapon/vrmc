@@ -18,9 +18,10 @@ try {
  page.on('pageerror',e=>errors.push(e.message));
  page.on('request',request=>{if(request.url().endsWith('.vrm'))modelRequests.push(request.url());});
  await page.goto(origin+'/models/');
- await page.waitForFunction(()=>document.querySelectorAll('article').length===6);
+ await page.waitForFunction(()=>document.querySelectorAll('article').length===14);
  assert.equal(await page.evaluate(()=>cameraRequests),0);
  assert.equal(modelRequests.length,0,'the catalogue must not prefetch model binaries');
+ for(const image of await page.locator('article img').all()) await image.scrollIntoViewIfNeeded();
  await page.waitForFunction(()=>[...document.images].every(img=>img.complete&&img.naturalWidth>0));
  const downloadEvent=page.waitForEvent('download');await page.locator('a[download="AvatarSample_G.vrm"]').click();
  const download=await downloadEvent;
@@ -36,7 +37,7 @@ try {
    assert.equal(await page.locator('#camera-preview').isVisible(),false);
  };
  await loaded('g');assert.equal(new URL(page.url()).searchParams.has('sample'),false);
- for(const id of ['i','m','n','x']){await page.locator('#sample-model').selectOption(id);await loaded(id);}
+ for(const id of ['c','f','h','p','r','v','y','z','i','m','n','x']){await page.locator('#sample-model').selectOption(id);await loaded(id);}
  await page.reload();await loaded('x');
  const popupEvent=page.waitForEvent('popup');await page.locator('#output').click();const popup=await popupEvent;
  await popup.waitForFunction(()=>globalThis.testViewer?.avatar?.vrm.meta.name==='AvatarSample_X',null,{timeout:30000});
@@ -53,5 +54,5 @@ try {
  await popup.close();await page.reload();
  await page.waitForFunction(()=>document.getElementById('model-name').textContent==='サンプルVRM');
  assert.deepEqual(errors,[]);
- console.log('Sample catalogue: thumbnails/no camera/no binary prefetch, exact download, all five real VRMs, selection/reload, popup, failed fetch retention, default reset passed.');
+ console.log('Sample catalogue: thumbnails/no camera/no binary prefetch, exact download, all 13 real VRMs, selection/reload, popup, failed fetch retention, default reset passed.');
 }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}

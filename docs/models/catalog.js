@@ -5,7 +5,7 @@ export const sampleModels = Object.freeze([
     thumbnail:'VRM1_Constraint_Twist_Sample.png',
     license:'https://vrm.dev/licenses/1.0/',
     terms:'埋め込み設定：誰でも利用可／法人の商用利用可／クレジット不要／再配布・改変再配布可'},
-  ...['G','I','M','N','X'].map(letter=>({id:letter.toLowerCase(), name:`AvatarSample_${letter}`,
+  ...['C','F','G','H','I','M','N','P','R','V','X','Y','Z'].map(letter=>({id:letter.toLowerCase(), name:`AvatarSample_${letter}`,
     file:`samples/AvatarSample_${letter}.vrm`, author:'pixiv VRoid Project',
     thumbnail:`samples/AvatarSample_${letter}.png`,
     terms:'埋め込み設定：利用者は作者のみ／個人の非営利利用／クレジット必須／再配布不可／改変不可',
