@@ -8,6 +8,7 @@
     "test:browser": "node tests/browser-smoke.js",
     "test:motion": "node tests/browser-arm-motion.js",
     "test:head-motion": "node tests/browser-head-motion.js",
+    "test:samples": "node tests/browser-samples.js",
     "test:startup": "node tests/browser-startup.js",
     "test:tracking": "node tests/tracker-browser.js"
   },

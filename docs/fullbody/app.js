@@ -1,4 +1,5 @@
 import {Viewer} from './viewer.js';
+import {sampleModels, sampleFile} from '../models/catalog.js';
 import {Tracker} from './tracker.js';
 import {FaceSolver, measureFace, calibrateFace} from './face.js';
 import {TrackingState} from './tracking-state.js';
@@ -261,14 +262,15 @@ function stopCamera() {
   cameraButtons();
 }
 
-async function loadModel(file, save = true) {
+async function loadModel(file, save = true, sampleId = null) {
   if (loadingModel) return;
   if (file && !file.name?.toLowerCase().endsWith('.vrm')) { status('.vrmファイルを選択してください。', true); return; }
   loadingModel = true;
-  $('files').disabled = $('sample').disabled = true;
+  $('files').disabled = $('sample').disabled = $('sample-model').disabled = true;
   $('loading').hidden = false;
   $('loading').textContent = 'アバターを読み込んでいます…';
   try {
+    if (sampleId !== null) file = await sampleFile(sampleId);
     if (!await viewer.load(file)) return;
     modelFile = file || null;
     viewer.avatar.setCalibration(calibration.body || null);
@@ -284,13 +286,16 @@ async function loadModel(file, save = true) {
     post({type:'model', file:modelFile, view:viewer.getView()});
     sendState();
     $('loading').hidden = true;
+    return true;
   } catch (error) {
     status(`VRMを読み込めませんでした: ${error.message}`, true);
     $('loading').textContent = 'モデルを読み込めませんでした。別のVRMを選択してください。';
     $('loading').hidden = !!viewer.avatar;
   } finally {
     loadingModel = false;
-    $('files').disabled = $('sample').disabled = false;
+    $('files').disabled = $('sample').disabled = $('sample-model').disabled = false;
+    $('sample-model').value = modelFile
+      ? sampleModels.find(model => model.file.split('/').at(-1) === modelFile.name)?.id ?? '' : 'default';
     $('files').value = '';
     $('save').disabled = !viewer.avatar;
     cameraButtons();
@@ -450,7 +455,7 @@ function animate(now) {
 }
 
 async function init() {
-  $('build-version').textContent = 'Full Body · 2026.09.29.2';
+  $('build-version').textContent = 'Full Body · 2026.09.29.3';
   try {
     viewer = new Viewer($('stage'), {interactive:!isOutput, onViewChange:view=>post({type:'view',view})});
     viewer.setDisplay(settings);
@@ -502,6 +507,8 @@ async function init() {
       finally { $('save').disabled=!viewer.avatar; }
     };
     $('files').onchange = () => { if ($('files').files[0]) loadModel($('files').files[0]); };
+    for (const model of sampleModels) $('sample-model').add(new Option(model.name,model.id));
+    $('sample-model').onchange = () => { if ($('sample-model').value) loadModel(null,true,$('sample-model').value); };
     $('sample').onclick = () => loadModel(null);
     window.addEventListener('dragover', event => event.preventDefault());
     window.addEventListener('drop', event => { event.preventDefault(); if (event.dataTransfer.files[0]) loadModel(event.dataTransfer.files[0]); });
@@ -540,7 +547,14 @@ async function init() {
     enumerateCameras();
     let savedFile;
     try { savedFile=await modelStore(); } catch { /* A sample is always available without storage. */ }
-    await loadModel(savedFile || null,false);
+    const requestedSample = new URLSearchParams(location.search).get('sample');
+    const knownSample = sampleModels.some(model => model.id === requestedSample);
+    const selected = knownSample && await loadModel(null,true,requestedSample);
+    if (!selected) await loadModel(savedFile || null,false);
+    if (selected) {
+      const url = new URL(location.href); url.searchParams.delete('sample');
+      history.replaceState(null,'',url);
+    }
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('../service-worker.js').catch(()=>{});
     // A manual start/cancel during model loading overrides automatic startup.
     if (viewer.avatar && cameraGeneration === 0 && !running && !starting) await startCamera();

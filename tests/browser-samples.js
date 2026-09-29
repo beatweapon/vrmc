@@ -1,0 +1,57 @@
+import assert from 'node:assert/strict';
+import {once} from 'node:events';
+import {readFile,mkdir} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {chromium} from 'playwright';
+import {serve} from '../scripts/serve.js';
+const server=serve(0);if(!server.listening)await once(server,'listening');
+const origin=`http://127.0.0.1:${server.address().port}`;
+let browser;
+try {
+ browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined),args:['--enable-unsafe-swiftshader']});
+ const context=await browser.newContext({serviceWorkers:'block',viewport:{width:1280,height:900}});
+ await context.addInitScript(()=>{window.cameraRequests=0;navigator.mediaDevices.getUserMedia=async()=>{cameraRequests++;throw new DOMException('No camera in sample test','NotAllowedError');};});
+ const source=await readFile('docs/fullbody/viewer.js','utf8');
+ await context.route('**/fullbody/viewer.js',route=>route.fulfill({contentType:'text/javascript',body:source.replace('this.stage = stage;','this.stage = stage; globalThis.testViewer = this;')}));
+ const page=await context.newPage(),errors=[],modelRequests=[];
+ context.on('page',p=>p.on('pageerror',e=>errors.push(e.message)));
+ page.on('pageerror',e=>errors.push(e.message));
+ page.on('request',request=>{if(request.url().endsWith('.vrm'))modelRequests.push(request.url());});
+ await page.goto(origin+'/models/');
+ await page.waitForFunction(()=>document.querySelectorAll('article').length===6);
+ assert.equal(await page.evaluate(()=>cameraRequests),0);
+ assert.equal(modelRequests.length,0,'the catalogue must not prefetch model binaries');
+ await page.waitForFunction(()=>[...document.images].every(img=>img.complete&&img.naturalWidth>0));
+ const downloadEvent=page.waitForEvent('download');await page.locator('a[download="AvatarSample_G.vrm"]').click();
+ const download=await downloadEvent;
+ const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
+ assert.equal(digest(await readFile(await download.path())),digest(await readFile('docs/models/samples/AvatarSample_G.vrm')));
+ await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/sample-catalog.png',fullPage:true});
+ await page.locator('a[href$="sample=g"]').click();
+ await page.waitForURL('**/fullbody/**');
+ const loaded=async id=>{
+   await page.waitForFunction(id=>document.getElementById('model-name')?.textContent===`AvatarSample_${id.toUpperCase()}.vrm`&&!document.getElementById('sample-model').disabled,id,{timeout:30000});
+   assert.equal(await page.evaluate(()=>testViewer.avatar.vrm.meta.name),`AvatarSample_${id.toUpperCase()}`);
+   assert.equal(await page.locator('#sample-model').inputValue(),id);
+   assert.equal(await page.locator('#camera-preview').isVisible(),false);
+ };
+ await loaded('g');assert.equal(new URL(page.url()).searchParams.has('sample'),false);
+ for(const id of ['i','m','n','x']){await page.locator('#sample-model').selectOption(id);await loaded(id);}
+ await page.reload();await loaded('x');
+ const popupEvent=page.waitForEvent('popup');await page.locator('#output').click();const popup=await popupEvent;
+ await popup.waitForFunction(()=>globalThis.testViewer?.avatar?.vrm.meta.name==='AvatarSample_X',null,{timeout:30000});
+ await page.route('**/models/samples/AvatarSample_G.vrm',route=>route.fulfill({status:503,body:'fixture failure'}));
+ await page.locator('#sample-model').selectOption('g');
+ await page.waitForFunction(()=>document.getElementById('status').textContent.includes('503'));
+ await loaded('x');
+ await page.unroute('**/models/samples/AvatarSample_G.vrm');
+ await page.screenshot({path:'test-results/sample-selected.png',fullPage:true});
+ await page.locator('#sample').click();
+ await page.waitForFunction(()=>document.getElementById('model-name').textContent==='サンプルVRM'&&!document.getElementById('sample').disabled);
+ assert.equal(await page.locator('#sample-model').inputValue(),'default');
+ await popup.waitForFunction(()=>globalThis.testViewer?.avatar?.vrm.meta.name==='VRM1_Constraint_Twist_Sample');
+ await popup.close();await page.reload();
+ await page.waitForFunction(()=>document.getElementById('model-name').textContent==='サンプルVRM');
+ assert.deepEqual(errors,[]);
+ console.log('Sample catalogue: thumbnails/no camera/no binary prefetch, exact download, all five real VRMs, selection/reload, popup, failed fetch retention, default reset passed.');
+}finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}

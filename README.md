@@ -5,6 +5,8 @@ https://beatweapon.github.io/vrmc/
 
 **全身トラッキング版 VRMC Full Body**: [`docs/fullbody/`](docs/fullbody/index.html)（URL: https://beatweapon.github.io/vrmc/fullbody/）
 
+**共通サンプルVRM一覧・ダウンロード**: [`docs/models/`](docs/models/index.html)。全身版の設定から切り替えられます。モデルと一覧データは従来版・Partyでも再利用できる共通ディレクトリに配置しています。
+
 Webカメラ1台で顔・胴体・腕・脚・手指を追跡する、OBS配信用の単体アバター画面です。顔と首の処理は新規実装です。従来版とStudioの追跡処理はそのまま残しています。
 
 - VRM 0.x / 1.0の選択・ドロップ、前回のモデルと調整値のブラウザ内保存。
@@ -30,6 +32,7 @@ Webカメラ1台で顔・胴体・腕・脚・手指を追跡する、OBS配信�
 npm test
 npm run test:browser
 npm run test:startup
+npm run test:samples
 npm run test:tracking
 ```
 

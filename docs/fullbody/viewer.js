@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {FullBodyAvatar} from './avatar.js';
+import {sampleModels} from '../models/catalog.js';
 
 export class Viewer {
   constructor(stage, {interactive = true, onViewChange = () => {}} = {}) {
@@ -38,7 +39,7 @@ export class Viewer {
   }
   async load(file) {
     const id = ++this.generation;
-    const url = file ? URL.createObjectURL(file) : '../models/VRM1_Constraint_Twist_Sample.vrm';
+    const url = file ? URL.createObjectURL(file) : sampleModels[0].url;
     let next;
     try {
       next = await FullBodyAvatar.load(url, this.scene);
