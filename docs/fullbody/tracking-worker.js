@@ -36,16 +36,12 @@ self.onmessage = ({ data }) => {
 };
 
 async function initialize({ delegate, quality }) {
-  // 1.0.1's ES module loader supports module workers; the classic WASM loader
-  // relies on script-scoped globals and cannot be substituted here.
   const fileset = await FilesetResolver.forVisionTasks(WASM_ROOT, true);
   const { default: moduleFactory } = await import(fileset.wasmLoaderPath);
   async function create(Task, name, modelAssetPath, options) {
     self.postMessage({ type: 'status', message: `${name}の追跡モデルを準備しています…（初回は読み込みに時間がかかります）` });
     const canvas = new OffscreenCanvas(1, 1);
     canvases.push(canvas);
-    // The loader clears ModuleFactory after creating each task. Dynamic import
-    // is cached, so restore the pinned loader's export before every creation.
     self.ModuleFactory = moduleFactory;
     return Task.createFromOptions(fileset, {
       canvas,
@@ -56,7 +52,6 @@ async function initialize({ delegate, quality }) {
     });
   }
 
-  // Create sequentially: MediaPipe's WASM loader uses shared factory globals.
   tasks.face = await create(FaceLandmarker, '顔', MODELS.face, {
     numFaces: 1,
     outputFaceBlendshapes: true,
@@ -70,7 +65,6 @@ async function initialize({ delegate, quality }) {
     minPoseDetectionConfidence: 0.5,
     minPosePresenceConfidence: 0.5,
   });
-  // Keep the hand model ready so the checkbox never reloads models mid-frame.
   tasks.hands = await create(HandLandmarker, '手', MODELS.hands, {
     numHands: 2,
     minHandDetectionConfidence: 0.5,
@@ -81,32 +75,47 @@ async function initialize({ delegate, quality }) {
   self.postMessage({ type: 'ready', delegate });
 }
 
-function detect({ bitmap, timestamp, time, trackHands }) {
+function detect({ bitmap, timestamp, time, trackHands, diagnostics }) {
   let pose;
   try {
     if (!initialized) throw new Error('Tracking is not initialized.');
     if (!Number.isFinite(timestamp)) throw new Error('Invalid capture timestamp.');
-    // Defend the VIDEO contract even if the page clock is rounded for privacy.
     lastTimestamp = Math.max(timestamp, lastTimestamp + 1);
+
+    const workerStart = performance.now();
+    const faceStart = workerStart;
     const face = tasks.face.detectForVideo(bitmap, lastTimestamp);
-    // Face motion need not wait for the more expensive body/hand passes.
-    // The full packet still contains one coherent frame for arm association.
+    const faceMs = performance.now() - faceStart;
     self.postMessage({ type: 'face', result: { face, time } });
+
+    const poseStart = performance.now();
     pose = tasks.pose.detectForVideo(bitmap, lastTimestamp);
+    const poseMs = performance.now() - poseStart;
     const result = {
       face,
-      // Only clone serializable data; segmentation is deliberately disabled.
       pose: { landmarks: pose.landmarks, worldLandmarks: pose.worldLandmarks },
       time,
     };
-    if (trackHands) result.hands = tasks.hands.detectForVideo(bitmap, lastTimestamp);
+
+    let handMs = 0;
+    if (trackHands) {
+      const handStart = performance.now();
+      result.hands = tasks.hands.detectForVideo(bitmap, lastTimestamp);
+      handMs = performance.now() - handStart;
+    }
+    result.diagnostics = {
+      ...(diagnostics || {}),
+      faceMs,
+      poseMs,
+      handMs,
+      workerMs: performance.now() - workerStart,
+    };
     self.postMessage({ type: 'results', result });
   } catch (error) {
     console.error('MediaPipe inference:', error);
     dispose();
     self.postMessage({ type: 'error', message: '全身追跡中にエラーが発生しました。軽量モードに切り替えるか、カメラを開始し直してください。' });
   } finally {
-    // Pose results may own GPU masks if enabled in a future version.
     pose?.close?.();
     bitmap?.close();
   }
