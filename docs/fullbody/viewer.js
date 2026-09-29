@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {FullBodyAvatar} from './avatar.js';
 import {sampleModels} from '../models/catalog.js';
+import './background-controls.js';
 
 export class Viewer {
   constructor(stage, {interactive = true, onViewChange = () => {}} = {}) {
@@ -128,7 +129,7 @@ export class Viewer {
     this.backgroundTexture = null;
     this.backgroundBitmap = null;
     if (file) {
-      const bitmap = await createImageBitmap(file);
+      const bitmap = await createImageBitmap(file, {imageOrientation:'flipY'});
       const texture = new THREE.Texture(bitmap);
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.needsUpdate = true;
