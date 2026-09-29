@@ -12,6 +12,7 @@ const MODELS = {
 
 const tasks = {};
 const canvases = [];
+const poseHandDepth = { left: null, right: null };
 let initialized = false;
 let initializing = false;
 let lastTimestamp = -Infinity;
@@ -74,6 +75,7 @@ async function initialize({ delegate, quality }) {
 }
 
 function invalidatePoseHand(pose, side) {
+  poseHandDepth[side] = null;
   const indices = side === 'left' ? [15, 17, 19, 21] : [16, 18, 20, 22];
   for (const collection of [pose.landmarks?.[0], pose.worldLandmarks?.[0]]) {
     if (!collection) continue;
@@ -89,6 +91,7 @@ function invalidatePoseHand(pose, side) {
 function validatePoseHands(pose, hands, enabled) {
   if (!enabled) return;
   const poseImage = pose.landmarks?.[0];
+  const poseWorld = pose.worldLandmarks?.[0];
   if (!poseImage) return;
   const handWrists = (hands?.landmarks ?? []).map(points => points?.[0]).filter(Boolean);
   for (const [side, index] of [['left', 15], ['right', 16]]) {
@@ -99,8 +102,24 @@ function validatePoseHands(pose, hands, enabled) {
     }
     // Pose sometimes hallucinates its four hand landmarks on background detail.
     // A real HandLandmarker wrist should occupy roughly the same image region.
-    const corroborated = handWrists.some(hand => Math.hypot(hand.x - wrist.x, hand.y - wrist.y) < 0.14);
-    if (!corroborated) invalidatePoseHand(pose, side);
+    const hand = handWrists.find(candidate => Math.hypot(candidate.x - wrist.x, candidate.y - wrist.y) < 0.14);
+    if (!hand) {
+      invalidatePoseHand(pose, side);
+      continue;
+    }
+
+    // Hand world landmarks are hand-centered, so absolute depth still comes
+    // from Pose. Smooth only that weak monocular Z cue; Hand continues to own
+    // image X/Y and palm/finger articulation.
+    const worldWrist = poseWorld?.[index];
+    if (worldWrist && Number.isFinite(worldWrist.z)) {
+      const previous = poseHandDepth[side];
+      const moving = previous && Math.hypot(hand.x - previous.x, hand.y - previous.y) > 0.06;
+      const amount = previous ? (moving ? 0.55 : 0.22) : 1;
+      const z = previous ? previous.z + amount * (worldWrist.z - previous.z) : worldWrist.z;
+      worldWrist.z = z;
+      poseHandDepth[side] = { x: hand.x, y: hand.y, z };
+    }
   }
 }
 
@@ -139,6 +158,7 @@ function detect({ bitmap, timestamp, time, trackHands }) {
 
 function dispose() {
   initialized = false;
+  poseHandDepth.left = poseHandDepth.right = null;
   for (const [key, task] of Object.entries(tasks)) {
     try { task.close(); } catch { /* Continue releasing the remaining graphs. */ }
     delete tasks[key];
