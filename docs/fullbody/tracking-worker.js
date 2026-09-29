@@ -73,6 +73,37 @@ async function initialize({ delegate, quality }) {
   self.postMessage({ type: 'ready', delegate });
 }
 
+function invalidatePoseHand(pose, side) {
+  const indices = side === 'left' ? [15, 17, 19, 21] : [16, 18, 20, 22];
+  for (const collection of [pose.landmarks?.[0], pose.worldLandmarks?.[0]]) {
+    if (!collection) continue;
+    for (const index of indices) {
+      const point = collection[index];
+      if (!point) continue;
+      point.visibility = 0;
+      point.presence = 0;
+    }
+  }
+}
+
+function validatePoseHands(pose, hands, enabled) {
+  if (!enabled) return;
+  const poseImage = pose.landmarks?.[0];
+  if (!poseImage) return;
+  const handWrists = (hands?.landmarks ?? []).map(points => points?.[0]).filter(Boolean);
+  for (const [side, index] of [['left', 15], ['right', 16]]) {
+    const wrist = poseImage[index];
+    if (!wrist) {
+      invalidatePoseHand(pose, side);
+      continue;
+    }
+    // Pose sometimes hallucinates its four hand landmarks on background detail.
+    // A real HandLandmarker wrist should occupy roughly the same image region.
+    const corroborated = handWrists.some(hand => Math.hypot(hand.x - wrist.x, hand.y - wrist.y) < 0.14);
+    if (!corroborated) invalidatePoseHand(pose, side);
+  }
+}
+
 function detect({ bitmap, timestamp, time, trackHands }) {
   let pose;
   try {
@@ -84,12 +115,11 @@ function detect({ bitmap, timestamp, time, trackHands }) {
     // Hand latency matters more than keeping Pose/Hand delivery atomic. Run the
     // hand graph first and publish it immediately, then let the heavier Pose
     // graph finish. Both observations still carry the same camera capture time.
-    if (trackHands) {
-      const hands = tasks.hands.detectForVideo(bitmap, lastTimestamp);
-      self.postMessage({ type: 'hands', result: { hands, time } });
-    }
+    const hands = trackHands ? tasks.hands.detectForVideo(bitmap, lastTimestamp) : null;
+    if (hands) self.postMessage({ type: 'hands', result: { hands, time } });
 
     pose = tasks.pose.detectForVideo(bitmap, lastTimestamp);
+    validatePoseHands(pose, hands, trackHands);
     const result = {
       // Only clone serializable data; segmentation is deliberately disabled.
       pose: { landmarks: pose.landmarks, worldLandmarks: pose.worldLandmarks },
