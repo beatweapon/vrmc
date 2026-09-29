@@ -5,8 +5,12 @@ const ICONS = {
 
 const style = document.createElement('style');
 style.textContent = `
-.background-quick-controls{position:fixed;right:18px;bottom:18px;z-index:6;display:flex;gap:8px;align-items:flex-end;font-family:inherit}
-.background-quick-button{width:44px;height:44px;min-height:44px;padding:10px;border:1px solid #6c827a;border-radius:9px;background:#172028da;color:#acedd1;display:grid;place-items:center;box-shadow:0 3px 14px #0005;transition:background .15s,border-color .15s,transform .15s}
+#image-control{display:block!important;margin-top:16px;padding-top:14px;border-top:1px solid #303b43}
+#image-control::before{content:'背景画像';display:block;margin-bottom:9px;font-size:11px;color:#bdc9d1}
+#image-control>.button,#image-control>button{display:block;width:100%;margin:8px 0;position:static}
+#image-control>.hint{margin:8px 0 0;overflow-wrap:anywhere}
+.background-quick-controls{position:fixed;right:18px;bottom:18px;z-index:6;display:flex;flex-direction:row;gap:8px;align-items:center;width:max-content}
+.background-quick-button{position:relative;flex:0 0 44px;width:44px;height:44px;min-width:44px;min-height:44px;padding:10px;border:1px solid #6c827a;border-radius:9px;background:#172028da;color:#acedd1;display:grid;place-items:center;box-shadow:0 3px 14px #0005;transition:background .15s,border-color .15s,transform .15s}
 .background-quick-button:hover{background:#26363e;border-color:#91b5a5}.background-quick-button:active{transform:translateY(1px)}
 .background-quick-button svg{width:22px;height:22px;fill:currentColor;display:block}
 .background-quick-button.drop-target{border-color:#acedd1;background:#29483d;box-shadow:0 0 0 3px #acedd12b,0 3px 14px #0005}
@@ -23,10 +27,26 @@ document.head.appendChild(style);
 
 const initBackgroundControls = () => {
   if (document.documentElement.classList.contains('output')) return;
-  const backgroundSelect = document.querySelector('[data-setting="background"]');
+  const visibleSelect = document.querySelector('select[data-setting="background"]');
   const storedColor = document.querySelector('[data-setting="backgroundColor"]');
   const fileInput = document.getElementById('background-file');
-  if (!backgroundSelect || !storedColor || !fileInput) return;
+  if (!visibleSelect || !storedColor || !fileInput) return;
+
+  const settingSelect = document.createElement('select');
+  settingSelect.hidden = true;
+  settingSelect.dataset.setting = 'background';
+  for (const value of ['transparent','green','blue','color','image']) settingSelect.add(new Option(value, value));
+  visibleSelect.removeAttribute('data-setting');
+  visibleSelect.querySelector('option[value="image"]')?.remove();
+  visibleSelect.insertAdjacentElement('afterend', settingSelect);
+
+  visibleSelect.addEventListener('change', () => {
+    settingSelect.value = visibleSelect.value;
+    settingSelect.dispatchEvent(new Event('input', {bubbles:true}));
+  });
+  settingSelect.addEventListener('input', () => {
+    if (settingSelect.value !== 'image') visibleSelect.value = settingSelect.value;
+  });
 
   const root = document.createElement('div');
   root.className = 'background-quick-controls';
@@ -50,8 +70,8 @@ const initBackgroundControls = () => {
   const quickColor = root.querySelector('input[type="color"]');
 
   const selectBackground = value => {
-    backgroundSelect.value = value;
-    backgroundSelect.dispatchEvent(new Event('input', {bubbles:true}));
+    settingSelect.value = value;
+    settingSelect.dispatchEvent(new Event('input', {bubbles:true}));
   };
   const chooseImage = file => {
     if (!file?.type?.startsWith('image/')) return;
@@ -75,7 +95,7 @@ const initBackgroundControls = () => {
   quickColor.oninput = () => {
     storedColor.value = quickColor.value;
     storedColor.dispatchEvent(new Event('input', {bubbles:true}));
-    if (backgroundSelect.value !== 'color') selectBackground('color');
+    if (settingSelect.value !== 'color') selectBackground('color');
   };
 
   for (const type of ['dragenter','dragover']) photoButton.addEventListener(type, event => {
