@@ -22,7 +22,7 @@ export function sanitizeSettings(input = {}) {
       settings[key] = Math.max(ranges[key][0], Math.min(ranges[key][1], value));
     } else if (typeof DEFAULTS[key] === 'boolean' && typeof value === 'boolean') settings[key] = value;
     else if (key === 'cameraId' && typeof value === 'string') settings[key] = value;
-    else if (key === 'background' && ['transparent','green','blue','color'].includes(value)) settings[key] = value;
+    else if (key === 'background' && ['transparent','green','blue','color','image'].includes(value)) settings[key] = value;
     else if (key === 'quality' && ['balanced','light'].includes(value)) settings[key] = value;
     else if (key === 'backgroundColor' && /^#[\da-f]{6}$/i.test(value)) settings[key] = value;
   }
@@ -52,18 +52,22 @@ function database() {
     request.onupgradeneeded = () => request.result.createObjectStore('files');
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
-    request.onblocked = () => reject(new Error('アバター保存用データベースを開けません。'));
+    request.onblocked = () => reject(new Error('保存用データベースを開けません。'));
   });
 }
-export async function modelStore(file) {
+
+async function fileStore(key, file) {
   const db = await database();
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction('files', file === undefined ? 'readonly' : 'readwrite');
       const store = tx.objectStore('files');
-      const request = file === undefined ? store.get('avatar') : file === null ? store.delete('avatar') : store.put(file, 'avatar');
+      const request = file === undefined ? store.get(key) : file === null ? store.delete(key) : store.put(file, key);
       tx.oncomplete = () => resolve(request.result);
-      tx.onabort = tx.onerror = () => reject(tx.error || new Error('アバターを保存できません。'));
+      tx.onabort = tx.onerror = () => reject(tx.error || new Error('ファイルを保存できません。'));
     });
   } finally { db.close(); }
 }
+
+export const modelStore = file => fileStore('avatar', file);
+export const backgroundStore = file => fileStore('background', file);
