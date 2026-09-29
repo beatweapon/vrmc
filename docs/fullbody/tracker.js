@@ -201,7 +201,7 @@ export class Tracker {
     const avg = (value, count = d.resultFrames) => count ? value / count : 0;
     const track = session.video?.srcObject?.getVideoTracks?.()[0];
     const trackFps = track?.getSettings?.().frameRate;
-    const previewVisible = session.video?.offsetParent !== null;
+    const previewVisible = !session.video?.closest?.('#camera-preview')?.hidden;
     const message = [
       `計測 ${previewVisible ? 'PREVIEW ON' : 'PREVIEW OFF'}`,
       `track ${Number.isFinite(trackFps) ? trackFps.toFixed(1) : '?'} fps`,
