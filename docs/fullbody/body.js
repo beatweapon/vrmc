@@ -154,7 +154,7 @@ function imageAnchors(pose, face, threshold) {
 export function solveBody(pose, hands, settings = {}, faceLandmarks = null) {
   const threshold = settings.minVisibility ?? 0.55;
   const points = pose?.worldLandmarks?.[0];
-  const result = { hips: null, torso: null, directions: {}, palms: {}, hands:{}, armTargets: {}, poseArmTargets: {},
+  const result = { hips: null, torso: null, directions: {}, palms: {}, hands:{}, armTargets: {},
     releasedSides: (hands?.releasedSides ?? []).filter(side => side === 'left' || side === 'right'), tracked: false, legTracked: false };
   if (poseVisible(pose, [11, 12, 23, 24], threshold)) {
     const up = midpoint(points, 11, 12).sub(midpoint(points, 23, 24));
@@ -194,38 +194,24 @@ export function solveBody(pose, hands, settings = {}, faceLandmarks = null) {
     }
   }
   result.legTracked = !settings.seated && poseVisible(pose, [23, 24, 25, 26, 27, 28], threshold);
-  // A visible Pose wrist is sufficient even when the elbow is cropped. Use
-  // the same image-to-avatar mapping as Hand, rather than waiting for its ROI.
-  // Keep the established identity gate: uncertain hands must not raise a new
-  // arm through a contradictory Pose label.
   const anchors = imageAnchors(pose, faceLandmarks, threshold);
-  for (const [side, wristIndex] of [['left', 15], ['right', 16]]) {
-    if (settings.trackHands !== false && hands?.pendingSides?.includes(side)) continue;
-    if (!poseVisible(pose, [11, 12, wristIndex], Math.max(0, threshold - 0.1))) continue;
-    const wrist = pose.landmarks?.[0]?.[wristIndex];
-    if (!wrist) continue;
-    const span = landmarkVector(points[11]).distanceTo(landmarkVector(points[12]));
-    result.poseArmTargets[side] = { ...anchors, wrist: { x: wrist.x, y: wrist.y },
-      acquire: poseVisible(pose, [11, 12, wristIndex], threshold),
-      depthRatio: clamp((landmarkVector(points[wristIndex]).z - midpoint(points, 11, 12).z) / Math.max(.1, span), -1.5, 1.5),
-      elbowDirection: result.directions[`${side}UpperArm`]?.clone() ?? null };
-  }
   if (settings.trackHands !== false) {
     for (const [side, { world: hand, image, physicalId }] of assignHands(hands, pose, threshold)) {
       if (!visible(hand, [0, 5, 9, 17], 0)) continue;
       const wristIndex=side==='left'?15:16;
-      // One position path for the observed hand, with the measured elbow as
-      // the bend hint. Crossing a visibility threshold no longer switches
-      // between unrelated FK and IK wrist targets every other frame.
+      const lowerName=`${side}LowerArm`;
+      // HandLandmarker exclusively owns wrist position. Pose may contribute the
+      // elbow->wrist direction only when its wrist agrees with the Hand wrist,
+      // giving IK a bend-plane hint without becoming a competing position path.
       result.armTargets[side] = {
         ...anchors, wrist: { x: image[0].x, y: image[0].y }, physicalId,
         elbowDirection: result.directions[`${side}UpperArm`]?.clone() ?? null,
+        forearmDirection: null,
       };
-      if (poseVisible(pose,[11,12,wristIndex],threshold)) {
+      if (poseVisible(pose,[wristIndex],threshold)) {
         const imageWrist=pose.landmarks?.[0]?.[wristIndex];
         if (imageWrist && Math.hypot((imageWrist.x-image[0].x)*anchors.aspect,imageWrist.y-image[0].y)<.12) {
-          const shoulderSpan=visible(points,[11,12],threshold)?landmarkVector(points[11]).distanceTo(landmarkVector(points[12])):.4;
-          result.armTargets[side].depthRatio=clamp((landmarkVector(points[wristIndex]).z-midpoint(points,11,12).z)/Math.max(.1,shoulderSpan),-1.5,1.5);
+          result.armTargets[side].forearmDirection = result.directions[lowerName]?.clone() ?? null;
         }
       }
       // Finger articulation is independent of whether the torso can be found.
@@ -446,7 +432,7 @@ export class BodyRetargeter {
     const fallbackArms = new Set();
     for (const side of ['left', 'right']) {
       if (this.updateArmTarget(side, settings.trackHands === false ? null : solution.armTargets?.[side],
-        sampleTime, now, dt, settings, solution.directions, solution.poseArmTargets?.[side])) {
+        sampleTime, now, dt, settings, solution.directions)) {
         fallbackArms.add(side);
       }
     }
@@ -626,7 +612,7 @@ export class BodyRetargeter {
     return target;
   }
 
-  updateArmTarget(side, anchor, sampleTime, now, dt, settings, directions = {}, poseAnchor = null) {
+  updateArmTarget(side, anchor, sampleTime, now, dt, settings, directions = {}) {
     const upperName = side + 'UpperArm';
     const lowerName = side + 'LowerArm';
     const upper = this.bones[upperName];
@@ -649,55 +635,34 @@ export class BodyRetargeter {
     let recent = this.lastArmTargets.get(side);
     if (fresh) {
       const handTarget = anchor && this.imageWristTarget(anchor, sampleTime);
-      const poseAccepted = poseAnchor && (poseAnchor.acquire || sampleTime - (recent?.poseTime ?? -Infinity) <= 0.4);
-      let poseTarget = poseAccepted && this.imageWristTarget(poseAnchor, sampleTime);
-      const upperDirection = directions[upperName], lowerDirection = directions[lowerName];
-      // Pose and Hand feed the same constraint/state. A detector dropout must
-      // not switch between independently smoothed FK and IK bone rotations.
-      const completePose = upperDirection && lowerDirection;
-      if (completePose) {
-        poseTarget = shoulder.clone().addScaledVector(upperDirection, upperLength).addScaledVector(lowerDirection, lowerLength);
-      }
-      let target = handTarget || poseTarget;
-      const measured = upperDirection ?? anchor?.elbowDirection ?? poseAnchor?.elbowDirection;
-      if (target) {
+      const upperDirection = directions[upperName];
+      if (handTarget) {
         if (!recent || now - recent.time > 0.4) {
           recent = { motion: new ArmMotion(wrist.clone().sub(shoulder).applyQuaternion(inverse)) };
         }
-        const localTarget = (value, imageBased) => {
-          const offset = value.clone().sub(shoulder);
-          if (imageBased) {
-            // Weak monocular depth must be limited in CAMERA axes before moving
-            // into the torso frame; torso yaw must not change image x/y priority.
-            const reach = upperLength + lowerLength;
-            const depthReach = Math.sqrt(Math.max(0, reach * reach - offset.x ** 2 - offset.y ** 2));
-            offset.z = clamp(offset.z, -depthReach, depthReach);
-          }
-          return offset.applyQuaternion(inverse);
-        };
-        const source = handTarget ? 'hand' : 'pose';
-        const mode = source === 'hand' ? 'hand' : completePose ? 'pose' : 'pose-image';
-        const candidates = { hand: handTarget && localTarget(handTarget, true),
-          pose: poseTarget && localTarget(poseTarget, !completePose) };
-        if (recent.mode && recent.mode !== mode) {
-          recent.handover = { from: recent.target.clone(), start: now, duration: this.response };
+        const offset = handTarget.clone().sub(shoulder);
+        // Weak monocular depth is intentionally not borrowed from Pose. Keep the
+        // Hand image target within the physical reach in camera axes.
+        const reach = upperLength + lowerLength;
+        const depthReach = Math.sqrt(Math.max(0, reach * reach - offset.x ** 2 - offset.y ** 2));
+        offset.z = clamp(offset.z, -depthReach, depthReach);
+        recent.target = offset.applyQuaternion(inverse);
+
+        let measured = upperDirection ?? anchor?.elbowDirection;
+        if (anchor?.forearmDirection) {
+          // Reconstruct an elbow from the Hand-owned wrist target and only the
+          // Pose elbow->wrist DIRECTION. Pose wrist position/depth never becomes
+          // the wrist target, but its forearm line constrains the bend plane.
+          measured = handTarget.clone().addScaledVector(anchor.forearmDirection, -lowerLength).sub(shoulder);
         }
-        target = candidates[source];
-        if (recent.handover) {
-          const blend = clamp((now - recent.handover.start + dt) / recent.handover.duration, 0, 1);
-          target = recent.handover.from.clone().lerp(target, blend * blend * (3 - 2 * blend));
-          if (blend === 1) recent.handover = null;
-        }
-        recent.target = target;
         if (measured) {
           recent.measured = measured.clone().applyQuaternion(inverse);
           recent.measuredTime = sampleTime;
         } else if (sampleTime - (recent.measuredTime ?? -Infinity) > 0.4) recent.measured = null;
-        if (poseTarget) recent.poseTime = sampleTime;
         recent.time = sampleTime;
         recent.physicalId = anchor?.physicalId ?? recent.physicalId;
-        recent.source = source;
-        recent.mode = mode;
+        recent.source = 'hand';
+        recent.mode = 'hand';
         this.lastArmTargets.set(side, recent);
       }
     }
