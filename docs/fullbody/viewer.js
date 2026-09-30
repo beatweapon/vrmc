@@ -9,10 +9,26 @@ export class Viewer {
   constructor(stage, {interactive = true, onViewChange = () => {}} = {}) {
     this.stage = stage;
     this.scene = new THREE.Scene();
-    this.scene.add(new THREE.AmbientLight(0xffffff, 1.2));
-    const light = new THREE.DirectionalLight(0xffffff, 1.0);
-    light.position.set(1, 3, 4);
-    this.scene.add(light);
+
+    // Keep a soft base light so faces and dark materials do not fall into shadow.
+    this.scene.add(new THREE.AmbientLight(0xffffff, .75));
+
+    // Use the main light direction from the Kalidoface-inspired rig, but avoid
+    // realtime shadow maps here because full-body tracking is performance-sensitive.
+    const lightRig = new THREE.Group();
+    lightRig.position.set(0, 1, 0);
+    const keyPivot = new THREE.Group();
+    lightRig.add(keyPivot);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    keyLight.position.set(0, 0, 1);
+    keyPivot.add(keyLight);
+    keyPivot.rotation.y = Math.PI * 2 * .64;
+    keyPivot.rotation.x = Math.PI * .75;
+    this.scene.add(lightRig);
+
+    // A subtle warm fill keeps the result from looking uniformly white/flat.
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0xdc8874, .3));
+
     this.camera = new THREE.PerspectiveCamera(32, 1, .01, 100);
     this.camera.position.set(0, 1, 4);
     this.renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
