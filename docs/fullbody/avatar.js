@@ -40,6 +40,22 @@ const keepHappyEyeBinds = manager => {
     details,
   };
 };
+const findHappyEyeTargets = scene => {
+  const targets = [];
+  scene?.traverse(primitive => {
+    const dictionary = primitive?.morphTargetDictionary;
+    const influences = primitive?.morphTargetInfluences;
+    if (!dictionary || !Array.isArray(influences)) return;
+    const entries = Object.entries(dictionary);
+    const exact = entries.find(([name]) => /^Fcl_EYE_Joy$/i.test(name));
+    const fallback = exact || entries.find(([name]) => /eye/i.test(name) && /(joy|happy|smile)/i.test(name));
+    if (!fallback) return;
+    const [name, index] = fallback;
+    if (!Number.isInteger(index) || index < 0 || index >= influences.length) return;
+    targets.push({ primitive, index, name });
+  });
+  return targets;
+};
 const debugNumber = value => Number.isFinite(value) ? value.toFixed(3) : '—';
 const appliedMorphValue = expression => Math.max(0, ...(expression?.binds || []).flatMap(bind =>
   (bind.primitives || []).map(primitive => primitive?.morphTargetInfluences?.[bind.index] || 0)));
@@ -141,8 +157,12 @@ export class FullBodyAvatar {
       const expression = vrm.expressionManager?.getExpression(name);
       if (expression) expression.overrideLookAt = 'none';
     }
+    const happy = vrm.expressionManager?.getExpression('happy');
+    if (happy) happy.overrideMouth = 'none';
     this.happyBindDebug = keepHappyEyeBinds(vrm.expressionManager);
     this.happyUsesEyeBinds = this.happyBindDebug.usesEyeBinds;
+    this.happyEyeTargets = this.happyUsesEyeBinds ? [] : findHappyEyeTargets(vrm.scene);
+    this.happyEyeApplied = 0;
   }
 
   calibrate(poseResult) {
@@ -259,6 +279,15 @@ export class FullBodyAvatar {
     });
   }
 
+  applyHappyEyeMorph() {
+    if (!this.happyEyeTargets?.length) return;
+    const amount = clamp01(this.vrm.expressionManager?.getValue('happy') ?? 0);
+    for (const target of this.happyEyeTargets) {
+      if (target.primitive?.morphTargetInfluences) target.primitive.morphTargetInfluences[target.index] = amount;
+    }
+    this.happyEyeApplied = amount;
+  }
+
   update(frame = {}, deltaSeconds = 1 / 60, settings = {}) {
     if (!this.vrm) return;
     const now = performance.now() / 1000;
@@ -297,6 +326,7 @@ export class FullBodyAvatar {
     this.updateRoot(pose, sampleTime, now, dt, settings);
     this.updateFace(frame.face, faceTime, now, dt, mirrored);
     this.vrm.update(dt);
+    this.applyHappyEyeMorph();
     this.renderFaceDebug();
   }
 
@@ -383,6 +413,7 @@ export class FullBodyAvatar {
     const morphs = Object.fromEntries([...MOUTH_NAMES, 'happy'].map(name => [name, appliedMorphValue(manager?.getExpression(name))]));
     const line = names => names.map(name => `${name}=${debugNumber(blend[name])}`).join('  ');
     const bindDebug = this.happyBindDebug || { originalNames:[], keptNames:[], details:[] };
+    const manualNames = [...new Set((this.happyEyeTargets || []).map(target => target.name))];
     this.debugPanel.textContent = [
       'FACE EXPRESSION DEBUG',
       `tracked=${!!face?.tracked}  mouthOpen=${debugNumber(measurement?.mouthOpen)}  mouthWidth=${debugNumber(measurement?.mouthWidth)}`,
@@ -391,6 +422,7 @@ export class FullBodyAvatar {
       `Solver:    ${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(solver[name])}`).join('  ')}`,
       `VRM weight:${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(weights[name])}`).join('  ')}`,
       `Morph max: ${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(morphs[name])}`).join('  ')}`,
+      `manual happy eye: amount=${debugNumber(this.happyEyeApplied)} targets=${manualNames.join(', ') || '(none)'}`,
       `happy overrideMouth=${happy?.overrideMouth ?? '—'}  overrideMouthAmount=${debugNumber(happy?.overrideMouthAmount)}`,
       `ALL overrideMouth total=${debugNumber(overrideTotal)}  => mouth multiplier=${debugNumber(mouthMultiplier)}`,
       `happy original binds: ${bindDebug.originalNames.join(', ') || '(none/unresolved)'}`,
