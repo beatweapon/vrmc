@@ -62,13 +62,18 @@
         margin-top: 0;
       }
 
-      ol {
+      ol,
+      ul {
         margin: 0;
         padding-left: 1.6rem;
       }
 
       li + li {
         margin-top: 24px;
+      }
+
+      ul li + li {
+        margin-top: 8px;
       }
 
       a {
@@ -116,6 +121,20 @@
           </li>
 
           <li>
+            <h2>会議向けのトラッキングモードを選ぶ</h2>
+            <p>
+              設定画面の「トラッキングモード」から、用途に合わせて <strong>Full Body</strong> または <strong>Face Only</strong> を選びます。
+            </p>
+            <ul>
+              <li><strong>Full Body</strong>：顔・体・手指を追跡します。手振りや姿勢も見せたいときに向いています。</li>
+              <li><strong>Face Only</strong>：顔だけを追跡し、体・手の追跡処理を止めます。会議中の負荷を抑えたいときに向いています。</li>
+            </ul>
+            <p class="note">
+              OBSやZoomなどを同時に使って重く感じる場合は、配信画面右下の羽アイコンから<strong>軽量モード</strong>をONにしてください。追跡・描画の負荷をまとめて下げられます。
+            </p>
+          </li>
+
+          <li>
             <h2>OBSでVRMC fullbodyをウィンドウキャプチャする</h2>
             <p>VRMC fullbodyのウィンドウを開いた状態でOBSを起動します。</p>
             <p>
@@ -135,6 +154,15 @@
             </p>
           </li>
         </ol>
+      </section>
+
+      <section>
+        <h2>自分だけのアバターを作りたい場合</h2>
+        <p>
+          オリジナルのVRMアバターを作りたい場合は、無料で使える
+          <a href="https://vroid.com/studio" target="_blank" rel="noopener">VRoid Studio</a>
+          がおすすめです。作成したVRMファイルをVRMC fullbodyへ読み込めば、そのまま会議用アバターとして使えます。
+        </p>
       </section>
 
       <section>
