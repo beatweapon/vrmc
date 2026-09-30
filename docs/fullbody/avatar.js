@@ -13,20 +13,34 @@ const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value 
 const finiteQuaternion = value => Array.isArray(value) && value.length === 4 && value.every(Number.isFinite);
 const morphTargetName = (primitive, index) => Object.entries(primitive?.morphTargetDictionary || {})
   .find(([, targetIndex]) => targetIndex === index)?.[0] || '';
+const bindMorphNames = expression => [...new Set((expression?.binds || []).flatMap(bind =>
+  (bind.primitives || []).map(primitive => morphTargetName(primitive, bind.index)).filter(Boolean)))];
 const isEyeMorph = name => /^Fcl_EYE_/i.test(name)
   || /(^|[_\-.])(eye|eyes|eyelid|lid)([_\-.]|$)/i.test(name);
 const keepHappyEyeBinds = manager => {
   const happy = manager?.getExpression('happy');
-  if (!happy || !Array.isArray(happy.binds) || typeof happy.deleteBind !== 'function') return false;
+  if (!happy || !Array.isArray(happy.binds) || typeof happy.deleteBind !== 'function') {
+    return { usesEyeBinds:false, originalNames:[], keptNames:[], details:[] };
+  }
   const binds = [...happy.binds];
+  const details = binds.flatMap((bind, bindIndex) => (bind.primitives || []).map((primitive, primitiveIndex) => {
+    const name = morphTargetName(primitive, bind.index);
+    const dictionary = Object.keys(primitive?.morphTargetDictionary || {});
+    return `bind${bindIndex}/mesh${primitiveIndex}: index=${bind.index} name=${name || '(unresolved)'} dict=[${dictionary.join(',') || '(none)'}]`;
+  }));
+  const originalNames = [...new Set(binds.flatMap(bind => (bind.primitives || [])
+    .map(primitive => morphTargetName(primitive, bind.index)).filter(Boolean)))];
   const eyeBinds = binds.filter(bind => Array.isArray(bind.primitives)
     && bind.primitives.some(primitive => isEyeMorph(morphTargetName(primitive, bind.index))));
   for (const bind of binds) if (!eyeBinds.includes(bind)) happy.deleteBind(bind);
-  return eyeBinds.length > 0;
+  return {
+    usesEyeBinds: eyeBinds.length > 0,
+    originalNames,
+    keptNames: bindMorphNames(happy),
+    details,
+  };
 };
 const debugNumber = value => Number.isFinite(value) ? value.toFixed(3) : '—';
-const bindMorphNames = expression => [...new Set((expression?.binds || []).flatMap(bind =>
-  (bind.primitives || []).map(primitive => morphTargetName(primitive, bind.index)).filter(Boolean)))];
 const appliedMorphValue = expression => Math.max(0, ...(expression?.binds || []).flatMap(bind =>
   (bind.primitives || []).map(primitive => primitive?.morphTargetInfluences?.[bind.index] || 0)));
 const createFaceDebugPanel = () => {
@@ -35,7 +49,7 @@ const createFaceDebugPanel = () => {
   panel.id = 'face-expression-debug';
   Object.assign(panel.style, {
     position:'fixed', left:'10px', bottom:'10px', zIndex:'30', margin:'0', padding:'10px 12px',
-    maxWidth:'min(720px,calc(100vw - 20px))', maxHeight:'48vh', overflow:'auto', pointerEvents:'none',
+    maxWidth:'min(900px,calc(100vw - 20px))', maxHeight:'58vh', overflow:'auto', pointerEvents:'none',
     background:'#071016e8', color:'#d9ffe8', border:'1px solid #5b8b72', borderRadius:'8px',
     font:'11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace', whiteSpace:'pre-wrap',
   });
@@ -102,7 +116,6 @@ export class FullBodyAvatar {
       throw new Error('このVRMには表示できるメッシュが含まれていません。');
     }
     this.height = Math.max(0.5, bounds.max.y - bounds.min.y);
-    // Ground the loaded avatar once; root tracking acts on the normalized hips afterwards.
     vrm.scene.position.y -= bounds.min.y;
     vrm.scene.updateWorldMatrix(true, true);
     const bones = Object.fromEntries(TRACKED_BONES.map(name => [name, vrm.humanoid.getNormalizedBoneNode(name)]));
@@ -124,15 +137,12 @@ export class FullBodyAvatar {
     this.floorBones = ['leftFoot', 'rightFoot', 'leftToes', 'rightToes'].filter(name => bones[name]);
     this.floorHeight = this.floorBones.length ? Math.min(...this.floorBones.map(name => bones[name].getWorldPosition(new Vector3()).y)) : 0;
     if (vrm.lookAt) vrm.lookAt.autoUpdate = false;
-    // Keep gaze through blinks for avatars whose eye direction is expression-based.
-    // Some VRMs otherwise suppress lookAt expressions while a blink is active.
     for (const name of ['blink', 'blinkLeft', 'blinkRight']) {
       const expression = vrm.expressionManager?.getExpression(name);
       if (expression) expression.overrideLookAt = 'none';
     }
-    // Keep the model-authored smiling eyes, but do not let `happy` modify the
-    // mouth. Vowels and mouth shape continue to come exclusively from face tracking.
-    this.happyUsesEyeBinds = keepHappyEyeBinds(vrm.expressionManager);
+    this.happyBindDebug = keepHappyEyeBinds(vrm.expressionManager);
+    this.happyUsesEyeBinds = this.happyBindDebug.usesEyeBinds;
   }
 
   calibrate(poseResult) {
@@ -189,17 +199,11 @@ export class FullBodyAvatar {
       }
       motion.captureTime = captureTime;
       motion.lastSeen = captureTime;
-
-      // Pose world-depth occasionally produces a one-sample shoulder/hip jump while
-      // the person is still. Confirm only large jumps that begin from a settled pose;
-      // continuous motion and ordinary small changes remain zero-latency.
       const settledAngle = (name === 'torso' ? 1.5 : 1.2) * Math.PI / 180;
       const spikeAngle = (name === 'torso' ? 4 : 3) * Math.PI / 180;
       const settled = motion.rotation.angleTo(motion.target) <= settledAngle;
       const jump = motion.target.angleTo(rotation);
       if (motion.pending) {
-        // A second consecutive off-target observation confirms real movement.
-        // If it returned to the old target, the held sample was just a spike.
         motion.target.copy(rotation);
         motion.pending = null;
       } else if (settled && jump > spikeAngle) {
@@ -260,9 +264,6 @@ export class FullBodyAvatar {
     const now = performance.now() / 1000;
     const sampleTime = Number.isFinite(frame.time) ? frame.time : -Infinity;
     const dt = Math.max(0, Math.min(0.1, deltaSeconds));
-    // Re-solve when inputs/settings change; freshness is checked independently on every render.
-    // A close-up can contain a face and hands without a Pose result. Preserve
-    // the camera aspect in that case instead of assuming a square image.
     const pose = {...frame.pose, imageWidth:frame.pose?.imageWidth ?? frame.imageWidth,
       imageHeight:frame.pose?.imageHeight ?? frame.imageHeight};
     const sequence = frame.sequence ?? sampleTime;
@@ -284,16 +285,11 @@ export class FullBodyAvatar {
       this.solutionSequence = sequence;
       this.solveSettings = solveSettings;
     }
-    // Pose inference only updates targets. Render-time motion advances every frame,
-    // just like headMotion, so sparse body inference never appears as pose steps.
     const renderedSolution = {
       ...this.solution,
       hips: this.bodyRotation('hips', now, dt, settings),
       torso: this.bodyRotation('torso', now, dt, settings),
     };
-    // The rendered hips/torso are already a continuous render-time pose. Seed
-    // those exact bone rotations before the retargeter so its generic body
-    // spring sees zero remaining error instead of adding a second layer of lag.
     this.applyRenderedBody(renderedSolution, now, dt, settings);
     const faceMotion = mirrored ? mirrorFaceMotion(frame.face) : frame.face;
     const faceTime = frame.faceTime ?? sampleTime;
@@ -309,8 +305,6 @@ export class FullBodyAvatar {
     if (!hips || !this.hipsPosition) return;
     const offset = rootOffset(pose, this.calibration, this.rig.torsoLength, settings);
     if (offset && now - sampleTime < 0.4) {
-      // The calibration remains in the user's coordinates. Reflect only the
-      // resulting lateral motion, not the model's authored rest translation.
       if (settings.mirrorAvatar === true) offset.x *= -1;
       this.rootTarget.copy(offset);
       this.rootTime = sampleTime;
@@ -320,12 +314,9 @@ export class FullBodyAvatar {
     this.rootVelocity ??= new Vector3();
     dampVector(this.root, this.rootVelocity, this.rootTarget, dt, this.rig.response ?? settings.bodySmoothing ?? 0.12);
     hips.position.copy(this.hipsPosition);
-    // Convert world-space translation to the hips parent's local axes (also handles VRM 0).
     const world = hips.parent.localToWorld(this.hipsPosition.clone()).add(this.root);
     hips.position.copy(hips.parent.worldToLocal(world));
     hips.updateWorldMatrix(true, true);
-    // A conservative floor bound prevents knees/crouches from pulling both feet below ground.
-    // This is not foot-lock IK: the lower visible foot may still slide with monocular estimates.
     if (!settings.seated && this.floorBones.length) {
       const lowest = Math.min(...this.floorBones.map(name => this.rig.bones[name].getWorldPosition(new Vector3()).y));
       const correction = Math.max(0, this.floorHeight - lowest);
@@ -364,7 +355,6 @@ export class FullBodyAvatar {
         if (!manager.getExpression(name)) continue;
         const target = holding ? clamp01(expressions[name]) : 0;
         const current = manager.getValue(name) ?? 0;
-        // FaceSolver already smooths live data. Only ease the recovery after detection loss.
         manager.setValue(name, holding ? target : current + (target - current) * smoothingAlpha(dt, 0.25));
       }
     }
@@ -392,6 +382,7 @@ export class FullBodyAvatar {
     const weights = Object.fromEntries([...MOUTH_NAMES, 'happy'].map(name => [name, manager?.getValue(name)]));
     const morphs = Object.fromEntries([...MOUTH_NAMES, 'happy'].map(name => [name, appliedMorphValue(manager?.getExpression(name))]));
     const line = names => names.map(name => `${name}=${debugNumber(blend[name])}`).join('  ');
+    const bindDebug = this.happyBindDebug || { originalNames:[], keptNames:[], details:[] };
     this.debugPanel.textContent = [
       'FACE EXPRESSION DEBUG',
       `tracked=${!!face?.tracked}  mouthOpen=${debugNumber(measurement?.mouthOpen)}  mouthWidth=${debugNumber(measurement?.mouthWidth)}`,
@@ -402,7 +393,9 @@ export class FullBodyAvatar {
       `Morph max: ${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(morphs[name])}`).join('  ')}`,
       `happy overrideMouth=${happy?.overrideMouth ?? '—'}  overrideMouthAmount=${debugNumber(happy?.overrideMouthAmount)}`,
       `ALL overrideMouth total=${debugNumber(overrideTotal)}  => mouth multiplier=${debugNumber(mouthMultiplier)}`,
-      `happy binds: ${bindMorphNames(happy).join(', ') || '(none)'}`,
+      `happy original binds: ${bindDebug.originalNames.join(', ') || '(none/unresolved)'}`,
+      `happy kept eye binds: ${bindDebug.keptNames.join(', ') || '(none)'}`,
+      ...bindDebug.details.map(detail => `  ${detail}`),
       mouthMultiplier < .999 ? '!!! mouth expressions are being attenuated by VRM overrideMouth !!!' : 'mouth override attenuation: none',
     ].join('\n');
   }
