@@ -10,6 +10,35 @@ import { dampQuaternion, dampVector } from './motion.js';
 const EXPRESSION_NAMES = ['blink', 'blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh', 'happy', 'angry', 'sad', 'relaxed', 'surprised'];
 const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 const finiteQuaternion = value => Array.isArray(value) && value.length === 4 && value.every(Number.isFinite);
+const morphTargetName = (primitive, index) => Object.entries(primitive?.morphTargetDictionary || {})
+  .find(([, targetIndex]) => targetIndex === index)?.[0] || '';
+const isEyeMorph = name => /^Fcl_EYE_/i.test(name)
+  || /(^|[_\-.])(eye|eyes|eyelid|lid)([_\-.]|$)/i.test(name);
+const keepHappyEyeBinds = manager => {
+  const happy = manager?.getExpression('happy');
+  if (!happy || !Array.isArray(happy.binds) || typeof happy.deleteBind !== 'function') return false;
+  const binds = [...happy.binds];
+  const eyeBinds = binds.filter(bind => Array.isArray(bind.primitives)
+    && bind.primitives.some(primitive => isEyeMorph(morphTargetName(primitive, bind.index))));
+  for (const bind of binds) if (!eyeBinds.includes(bind)) happy.deleteBind(bind);
+  return eyeBinds.length > 0;
+};
+const findHappyEyeTargets = scene => {
+  const targets = [];
+  scene?.traverse(primitive => {
+    const dictionary = primitive?.morphTargetDictionary;
+    const influences = primitive?.morphTargetInfluences;
+    if (!dictionary || !Array.isArray(influences)) return;
+    const entries = Object.entries(dictionary);
+    const exact = entries.find(([name]) => /^Fcl_EYE_Joy$/i.test(name));
+    const fallback = exact || entries.find(([name]) => /eye/i.test(name) && /(joy|happy|smile)/i.test(name));
+    if (!fallback) return;
+    const [, index] = fallback;
+    if (!Number.isInteger(index) || index < 0 || index >= influences.length) return;
+    targets.push({ primitive, index });
+  });
+  return targets;
+};
 const posePoint = point => point && [point.x, point.y, point.z].every(Number.isFinite)
   ? new Vector3(point.x, -point.y, -point.z) : null;
 const poseMidpoint = (points, a, b) => posePoint(points?.[a])?.add(posePoint(points?.[b])).multiplyScalar(0.5) ?? null;
@@ -96,6 +125,11 @@ export class FullBodyAvatar {
       const expression = vrm.expressionManager?.getExpression(name);
       if (expression) expression.overrideLookAt = 'none';
     }
+    const happy = vrm.expressionManager?.getExpression('happy');
+    if (happy) happy.overrideMouth = 'none';
+    const happyUsesEyeBinds = keepHappyEyeBinds(vrm.expressionManager);
+    this.happyEyeTargets = happyUsesEyeBinds ? [] : findHappyEyeTargets(vrm.scene);
+    this.happyEyeActive = false;
   }
 
   calibrate(poseResult) {
@@ -218,6 +252,14 @@ export class FullBodyAvatar {
     });
   }
 
+  applyHappyEyeMorph() {
+    if (!this.happyEyeTargets?.length) return;
+    const amount = this.happyEyeActive ? 1 : 0;
+    for (const target of this.happyEyeTargets) {
+      if (target.primitive?.morphTargetInfluences) target.primitive.morphTargetInfluences[target.index] = amount;
+    }
+  }
+
   update(frame = {}, deltaSeconds = 1 / 60, settings = {}) {
     if (!this.vrm) return;
     const now = performance.now() / 1000;
@@ -264,6 +306,7 @@ export class FullBodyAvatar {
     this.updateRoot(pose, sampleTime, now, dt, settings);
     this.updateFace(frame.face, faceTime, now, dt, mirrored);
     this.vrm.update(dt);
+    this.applyHappyEyeMorph();
   }
 
   updateRoot(pose, sampleTime, now, dt, settings) {
@@ -321,6 +364,19 @@ export class FullBodyAvatar {
         expressions.blinkLeft = 0;
         expressions.blinkRight = 0;
       }
+
+      // Smiling eyes are an authored expression, not a tracked eyelid pose.
+      // Once a smile is active, ignore real eyelid openness completely so Blink
+      // cannot stack with Joy and push the eye mesh past its intended shape.
+      const rawHappy = holding ? clamp01(expressions.happy) : 0;
+      this.happyEyeActive = this.happyEyeActive ? rawHappy > .08 : rawHappy > .15;
+      expressions.happy = this.happyEyeActive ? 1 : 0;
+      if (this.happyEyeActive) {
+        expressions.blink = 0;
+        expressions.blinkLeft = 0;
+        expressions.blinkRight = 0;
+      }
+
       for (const name of EXPRESSION_NAMES) {
         if (!manager.getExpression(name)) continue;
         const target = holding ? clamp01(expressions[name]) : 0;
