@@ -1,3 +1,5 @@
+import {extractVrmThumbnail} from '../models/vrm-thumbnail.js';
+
 export const DEFAULTS = Object.freeze({
   cameraId: '', fps: 24, quality: 'balanced', trackHands: true, seated: false,
   bodySmoothing: .12, faceSmoothing: .08, minVisibility: .55,
@@ -26,9 +28,7 @@ export function sanitizeSettings(input = {}) {
     else if (key === 'quality' && ['balanced','light'].includes(value)) settings[key] = value;
     else if (key === 'backgroundColor' && /^#[\da-f]{6}$/i.test(value)) settings[key] = value;
   }
-  for (const side of ['Left','Right']) {
-    settings[`eyeOpen${side}`] = Math.max(settings[`eyeOpen${side}`], settings[`eyeClosed${side}`] + .02);
-  }
+  for (const side of ['Left','Right']) settings[`eyeOpen${side}`] = Math.max(settings[`eyeOpen${side}`], settings[`eyeClosed${side}`] + .02);
   return settings;
 }
 
@@ -77,12 +77,15 @@ const modelKey = file => `${file.name}\u0000${file.size}\u0000${file.lastModifie
 
 export async function rememberModel(file) {
   if (!file?.name) return null;
-  const db = await database();
   const key = modelKey(file);
+  let thumbnail = null;
+  try { thumbnail = await extractVrmThumbnail(file); }
+  catch { /* A model without a readable thumbnail can still be saved. */ }
+  const db = await database();
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction('models', 'readwrite');
-      tx.objectStore('models').put({key, name:file.name, size:file.size, lastModified:file.lastModified || 0, savedAt:Date.now(), file}, key);
+      tx.objectStore('models').put({key, name:file.name, size:file.size, lastModified:file.lastModified || 0, savedAt:Date.now(), file, thumbnail}, key);
       tx.oncomplete = () => resolve(key);
       tx.onabort = tx.onerror = () => reject(tx.error || new Error('モデルを保存できません。'));
     });
