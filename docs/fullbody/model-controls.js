@@ -30,8 +30,8 @@ const initModelControls = async () => {
   root.innerHTML = `
     <div class="model-picker" hidden aria-label="アバターを選択">
       <div class="model-picker-header"><p class="model-picker-title">アバターを切り替える</p><button type="button" class="model-picker-add">＋ VRMを追加</button></div>
-      <section class="model-picker-section"><p class="model-picker-heading">サンプル</p><div class="model-picker-grid" data-list="samples"></div></section>
       <section class="model-picker-section"><p class="model-picker-heading">このブラウザに保存済み</p><div class="model-picker-grid" data-list="stored"></div><p class="model-picker-empty" hidden>読み込んだVRMがここに表示されます。</p></section>
+      <section class="model-picker-section"><p class="model-picker-heading">サンプル</p><div class="model-picker-grid" data-list="samples"></div></section>
     </div>
     <button type="button" class="model-quick-button" aria-label="アバターを切り替える" aria-expanded="false" title="アバターを切り替える">${PERSON_ICON}</button>`;
   document.body.appendChild(root);
@@ -107,13 +107,6 @@ const initModelControls = async () => {
   const render = async () => {
     clearThumbnailUrls();
     const selectedName = currentName();
-    samples.replaceChildren(...sampleModels.map(model => card({
-      name:model.name,
-      meta:model.author || 'サンプル',
-      thumbnail:model.thumbnail,
-      active:selectedName === model.file.split('/').at(-1) || (model.id === 'default' && selectedName === 'サンプルVRM'),
-      onclick:()=>selectSample(model.id),
-    })));
     try {
       const entries = await storedModels();
       stored.replaceChildren(...entries.map(entry => card({
@@ -129,6 +122,13 @@ const initModelControls = async () => {
       empty.hidden = false;
       empty.textContent = '保存済みVRMを読み込めませんでした。';
     }
+    samples.replaceChildren(...sampleModels.map(model => card({
+      name:model.name,
+      meta:model.author || 'サンプル',
+      thumbnail:model.thumbnail,
+      active:selectedName === model.file.split('/').at(-1) || (model.id === 'default' && selectedName === 'サンプルVRM'),
+      onclick:()=>selectSample(model.id),
+    })));
   };
 
   const remember = async file => {
