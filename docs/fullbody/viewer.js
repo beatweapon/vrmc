@@ -2,8 +2,32 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {FullBodyAvatar} from './avatar.js';
 import {sampleModels} from '../models/catalog.js';
+import {smileEyesOnly} from './smile-expression.js';
 import './background-controls.js';
 import './model-controls.js';
+
+const findEyeSmileMorphs = vrm => {
+  const exact = [];
+  const split = [];
+  vrm?.scene?.traverse(object => {
+    const dictionary = object.morphTargetDictionary;
+    const influences = object.morphTargetInfluences;
+    if (!dictionary || !influences) return;
+    const full = dictionary.Fcl_EYE_Joy;
+    if (Number.isInteger(full)) exact.push({object,index:full});
+    for (const name of ['Fcl_EYE_Joy_L', 'Fcl_EYE_Joy_R']) {
+      const index = dictionary[name];
+      if (Number.isInteger(index)) split.push({object,index});
+    }
+  });
+  return exact.length ? exact : split;
+};
+
+const applyEyeSmileMorph = (bindings, value) => {
+  for (const {object,index} of bindings || []) {
+    if (object.morphTargetInfluences?.[index] != null) object.morphTargetInfluences[index] = value;
+  }
+};
 
 export class Viewer {
   constructor(stage, {interactive = true, onViewChange = () => {}} = {}) {
@@ -33,6 +57,7 @@ export class Viewer {
     this.generation = 0;
     this.backgroundTexture = null;
     this.backgroundBitmap = null;
+    this.eyeSmileMorphs = [];
     this.resize();
   }
   resize() {
@@ -51,6 +76,7 @@ export class Viewer {
       if (id !== this.generation) { next.dispose(); return false; }
       this.avatar?.dispose();
       this.avatar = next;
+      this.eyeSmileMorphs = findEyeSmileMorphs(next.vrm);
       this.fitBust();
       return true;
     } finally { if (file) URL.revokeObjectURL(url); }
@@ -141,7 +167,23 @@ export class Viewer {
     this.setDisplay(settings);
   }
   render(frame, delta, settings, frozen) {
-    if (!frozen) this.avatar?.update(frame, delta, settings);
+    if (!frozen && this.avatar) {
+      let renderedFace = frame?.face ? smileEyesOnly(frame.face) : null;
+      if (renderedFace?.eyeSmile > 0) {
+        // Prefer an authored eye-only joy morph when the model has one, but keep
+        // a light eyelid fallback as insurance for models where the morph is
+        // absent, ineffective, or only affects part of the eye area.
+        const squint = renderedFace.eyeSmile * .22;
+        renderedFace = {...renderedFace, expressions:{
+          ...renderedFace.expressions,
+          blinkLeft:Math.max(renderedFace.expressions.blinkLeft ?? 0, squint),
+          blinkRight:Math.max(renderedFace.expressions.blinkRight ?? 0, squint),
+        }};
+      }
+      const renderedFrame = renderedFace ? {...frame, face:renderedFace} : frame;
+      this.avatar.update(renderedFrame, delta, settings);
+      if (this.eyeSmileMorphs.length) applyEyeSmileMorph(this.eyeSmileMorphs, renderedFace?.eyeSmile ?? 0);
+    }
     this.renderer.render(this.scene, this.camera);
   }
   async save() {
