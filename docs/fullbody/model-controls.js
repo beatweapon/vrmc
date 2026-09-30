@@ -43,6 +43,7 @@ const initModelControls = async () => {
   const stored = root.querySelector('[data-list="stored"]');
   const empty = root.querySelector('.model-picker-empty');
   let thumbnailUrls = [];
+  let selectingStored = false;
 
   const clearThumbnailUrls = () => {
     thumbnailUrls.forEach(url => URL.revokeObjectURL(url));
@@ -60,8 +61,10 @@ const initModelControls = async () => {
   const selectFile = file => {
     const transfer = new DataTransfer();
     transfer.items.add(file);
+    selectingStored = true;
     fileInput.files = transfer.files;
     fileInput.dispatchEvent(new Event('change', {bubbles:true}));
+    selectingStored = false;
     panel.hidden = true;
     toggle.setAttribute('aria-expanded', 'false');
   };
@@ -129,7 +132,7 @@ const initModelControls = async () => {
   };
 
   const remember = async file => {
-    if (!file?.name?.toLowerCase().endsWith('.vrm') || isSampleFile(file)) return;
+    if (selectingStored || !file?.name?.toLowerCase().endsWith('.vrm') || isSampleFile(file)) return;
     try { await rememberModel(file); await render(); }
     catch { /* The avatar can still be used when persistent storage is unavailable. */ }
   };
