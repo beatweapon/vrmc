@@ -281,7 +281,10 @@ export class FullBodyAvatar {
 
   applyHappyEyeMorph() {
     if (!this.happyEyeTargets?.length) return;
-    const amount = clamp01(this.vrm.expressionManager?.getValue('happy') ?? 0);
+    const raw = clamp01(this.vrm.expressionManager?.getValue('happy') ?? 0);
+    // Fcl_EYE_Joy reaches a fully closed stylized eye at weight 1 on common VRoid models.
+    // Keep the smile visible while capping it before eyelashes collapse/disappear.
+    const amount = Math.min(0.35, raw * 0.55);
     for (const target of this.happyEyeTargets) {
       if (target.primitive?.morphTargetInfluences) target.primitive.morphTargetInfluences[target.index] = amount;
     }
@@ -436,7 +439,7 @@ export class FullBodyAvatar {
     if (!this.vrm) return;
     this.debugPanel?.remove();
     this.scene.remove(this.vrm.scene);
-    VRMUtils.deepDispose(this.vrm.scene);
+    VRMUtils.deepDispose(vrm.scene);
     this.vrm = null;
   }
 }
