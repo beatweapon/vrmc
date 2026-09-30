@@ -269,8 +269,9 @@ function expressionTargets(measurement, settings, calibration) {
   const gap = Math.max(0, measurement.mouthOpen * relativeWidth - finite(calibration.mouthNeutral, .025));
   const jaw = score('jawOpen') * (1 - .85 * score('mouthClose'));
   const opening = clamp(Math.max((gap - .015) / .50, jaw * .85));
-  // A person's naturally narrow mouth must not count as pursing before capture.
-  const spreadSignal = Math.max(stretch, smile * .9,
+  // Smile is an emotion signal only. Mouth *shape* comes from the measured
+  // stretch/width/roundness so a wide-open laugh can still resolve to `aa`.
+  const spreadSignal = Math.max(stretch,
     widthCalibrated ? smoothstep((relativeWidth - 1.05) / .30) : 0);
   const roundSignal = Math.max(pucker, funnel,
     widthCalibrated ? smoothstep((.90 - relativeWidth) / .30) : 0);
