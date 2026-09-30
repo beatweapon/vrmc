@@ -95,6 +95,25 @@
         background: #f6f8fa;
       }
 
+      .install-preview {
+        margin: 12px 0 16px;
+      }
+
+      .install-preview img {
+        display: block;
+        width: 174px;
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+      }
+
+      .install-preview figcaption,
+      .vroid-preview figcaption {
+        margin-top: 8px;
+        color: #57606a;
+        font-size: 0.9rem;
+      }
+
       .vroid-preview {
         margin: 20px 0 0;
       }
@@ -109,12 +128,6 @@
         height: auto;
         border: 1px solid #d8dee4;
         border-radius: 10px;
-      }
-
-      .vroid-preview figcaption {
-        margin-top: 8px;
-        color: #57606a;
-        font-size: 0.9rem;
       }
     </style>
   </head>
@@ -137,6 +150,14 @@
               <a href="https://beatweapon.github.io/vrmc/fullbody/">VRMC fullbody</a>
               を開き、アドレスバーに表示されるインストールボタンからアプリとしてインストールします。
             </p>
+            <figure class="install-preview">
+              <img
+                src="./chrome-install-button.png"
+                alt="Chromeのアドレスバーに表示されるインストールボタン"
+                loading="lazy"
+              />
+              <figcaption>中央の、モニターに下向き矢印が付いたアイコンがインストールボタンです。</figcaption>
+            </figure>
             <p>
               インストール後にタスクバーやDockへ置いておくと、普段使っているブラウザのウィンドウやタブと混ざらないので便利です。
             </p>
