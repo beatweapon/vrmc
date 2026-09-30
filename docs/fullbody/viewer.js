@@ -62,6 +62,7 @@ const setupPerformanceControls = () => {
     .processing-mode-status{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 12px;padding:10px 12px;border:1px solid #303b43;border-radius:8px;background:#141c21}
     .processing-mode-status span{font-size:11px;color:#9eabb3}
     .processing-mode-status strong{font-size:11px;color:#dce5e9}
+    .processing-mode-status select{display:none!important}
     .lightweight-mode .processing-mode-status strong{color:#acedd1}
     .lightweight-quick-control{position:fixed;right:174px;bottom:18px;z-index:7;width:max-content}
     .lightweight-quick-button{width:44px;height:44px;min-width:44px;min-height:44px;padding:9px;border:1px solid #6c827a;border-radius:9px;background:#172028da;color:#acedd1;display:grid;place-items:center;box-shadow:0 3px 14px #0005;transition:background .15s,border-color .15s,box-shadow .15s,transform .15s}
@@ -85,6 +86,8 @@ const setupPerformanceControls = () => {
   const processingStatus = document.createElement('div');
   processingStatus.className = 'processing-mode-status';
   processingStatus.innerHTML = `<span>処理モード</span><strong>${lightweightState.enabled ? '軽量' : '標準'}</strong>`;
+  quality.hidden = true;
+  processingStatus.appendChild(quality);
   qualityLabel.replaceWith(processingStatus);
 
   const cameraButton = document.getElementById('camera');
