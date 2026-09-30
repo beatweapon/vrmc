@@ -240,10 +240,9 @@ function expressionTargets(measurement, settings, calibration) {
   const gap = Math.max(0, measurement.mouthOpen * relativeWidth - finite(calibration.mouthNeutral, .025));
   const jaw = score('jawOpen') * (1 - .85 * score('mouthClose'));
   const opening = clamp(Math.max((gap - .015) / .50, jaw * .85));
-  // Smile is intentionally excluded here. It is an emotion signal only; using it
-  // as a mouth-width signal turns a smile into a forced ih/ee vowel.
-  const spreadSignal = Math.max(stretch,
-    widthCalibrated ? smoothstep((relativeWidth - 1.05) / .30) : 0);
+  // Smile widens the measured landmarks too, so geometric width cannot safely
+  // classify ih/ee while smile is being handled independently as an emotion.
+  const spreadSignal = stretch;
   const roundSignal = Math.max(pucker, funnel,
     widthCalibrated ? smoothstep((.90 - relativeWidth) / .30) : 0);
   const round = smoothstep((roundSignal - .03) / .67);
