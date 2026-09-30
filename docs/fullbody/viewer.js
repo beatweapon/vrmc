@@ -10,31 +10,29 @@ export class Viewer {
     this.stage = stage;
     this.scene = new THREE.Scene();
 
+    // Keep a soft base light so faces and dark materials do not fall into shadow.
+    this.scene.add(new THREE.AmbientLight(0xffffff, .75));
+
+    // Use the main light direction from the Kalidoface-inspired rig, but avoid
+    // realtime shadow maps here because full-body tracking is performance-sensitive.
     const lightRig = new THREE.Group();
     lightRig.position.set(0, 1, 0);
-
     const keyPivot = new THREE.Group();
     lightRig.add(keyPivot);
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
     keyLight.position.set(0, 0, 1);
-    keyLight.castShadow = true;
-    keyLight.shadow.radius = 2;
-    keyLight.shadow.bias = 1.25e-6;
-    keyLight.shadow.mapSize.set(2048, 2048);
     keyPivot.add(keyLight);
     keyPivot.rotation.y = Math.PI * 2 * .64;
     keyPivot.rotation.x = Math.PI * .75;
-
-    const fillLight = new THREE.AmbientLight(0xdc8874, .5);
-    lightRig.add(fillLight);
     this.scene.add(lightRig);
+
+    // A subtle warm fill keeps the result from looking uniformly white/flat.
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0xdc8874, .3));
 
     this.camera = new THREE.PerspectiveCamera(32, 1, .01, 100);
     this.camera.position.set(0, 1, 4);
     this.renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.domElement.setAttribute('aria-label', 'VRMアバター');
@@ -69,9 +67,6 @@ export class Viewer {
       if (id !== this.generation) { next.dispose(); return false; }
       this.avatar?.dispose();
       this.avatar = next;
-      this.avatar.vrm.scene.traverse(object => {
-        if (object.isMesh) object.castShadow = true;
-      });
       this.fitBust();
       return true;
     } finally { if (file) URL.revokeObjectURL(url); }
