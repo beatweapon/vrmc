@@ -1,3 +1,5 @@
+import {extractVrmThumbnail} from '../models/vrm-thumbnail.js';
+
 export const DEFAULTS = Object.freeze({
   cameraId: '', fps: 24, quality: 'balanced', trackHands: true, seated: false,
   bodySmoothing: .12, faceSmoothing: .08, minVisibility: .55,
@@ -26,9 +28,7 @@ export function sanitizeSettings(input = {}) {
     else if (key === 'quality' && ['balanced','light'].includes(value)) settings[key] = value;
     else if (key === 'backgroundColor' && /^#[\da-f]{6}$/i.test(value)) settings[key] = value;
   }
-  for (const side of ['Left','Right']) {
-    settings[`eyeOpen${side}`] = Math.max(settings[`eyeOpen${side}`], settings[`eyeClosed${side}`] + .02);
-  }
+  for (const side of ['Left','Right']) settings[`eyeOpen${side}`] = Math.max(settings[`eyeOpen${side}`], settings[`eyeClosed${side}`] + .02);
   return settings;
 }
 
@@ -48,8 +48,12 @@ export function saveProfile(settings, calibration) {
 // Separate from the original app's store: failed writes never replace a working avatar.
 function database() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('vrmc-fullbody', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('files');
+    const request = indexedDB.open('vrmc-fullbody', 2);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains('files')) db.createObjectStore('files');
+      if (!db.objectStoreNames.contains('models')) db.createObjectStore('models');
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
     request.onblocked = () => reject(new Error('保存用データベースを開けません。'));
@@ -65,6 +69,37 @@ async function fileStore(key, file) {
       const request = file === undefined ? store.get(key) : file === null ? store.delete(key) : store.put(file, key);
       tx.oncomplete = () => resolve(request.result);
       tx.onabort = tx.onerror = () => reject(tx.error || new Error('ファイルを保存できません。'));
+    });
+  } finally { db.close(); }
+}
+
+const modelKey = file => `${file.name}\u0000${file.size}\u0000${file.lastModified || 0}`;
+
+export async function rememberModel(file) {
+  if (!file?.name) return null;
+  const key = modelKey(file);
+  let thumbnail = null;
+  try { thumbnail = await extractVrmThumbnail(file); }
+  catch { /* A model without a readable thumbnail can still be saved. */ }
+  const db = await database();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('models', 'readwrite');
+      tx.objectStore('models').put({key, name:file.name, size:file.size, lastModified:file.lastModified || 0, savedAt:Date.now(), file, thumbnail}, key);
+      tx.oncomplete = () => resolve(key);
+      tx.onabort = tx.onerror = () => reject(tx.error || new Error('モデルを保存できません。'));
+    });
+  } finally { db.close(); }
+}
+
+export async function storedModels() {
+  const db = await database();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('models', 'readonly');
+      const request = tx.objectStore('models').getAll();
+      request.onsuccess = () => resolve((request.result || []).sort((a,b)=>(b.savedAt || 0)-(a.savedAt || 0)));
+      request.onerror = () => reject(request.error || new Error('保存済みモデルを読み込めません。'));
     });
   } finally { db.close(); }
 }
