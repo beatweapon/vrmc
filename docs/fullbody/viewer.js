@@ -5,6 +5,81 @@ import {sampleModels} from '../models/catalog.js';
 import './background-controls.js';
 import './model-controls.js';
 
+const LIGHTWEIGHT_KEY = 'vrmc.fullbody.lightweight.v1';
+
+const readLightweightState = () => {
+  try { return JSON.parse(localStorage.getItem(LIGHTWEIGHT_KEY)) || {enabled:false, previous:null}; }
+  catch { return {enabled:false, previous:null}; }
+};
+const writeLightweightState = state => {
+  try { localStorage.setItem(LIGHTWEIGHT_KEY, JSON.stringify(state)); }
+  catch { /* The preset still works for the current page. */ }
+};
+const settingInput = key => document.querySelector(`[data-setting="${key}"]`);
+const updateSettingInput = (input, value) => {
+  if (!input) return;
+  if (input.type === 'checkbox') input.checked = !!value;
+  else input.value = String(value);
+  input.dispatchEvent(new Event('input', {bubbles:true}));
+};
+
+const setupLightweightMode = () => {
+  if (document.documentElement.classList.contains('output')) {
+    document.documentElement.classList.toggle('lightweight-mode', !!readLightweightState().enabled);
+    return;
+  }
+  const quality = settingInput('quality');
+  const qualityLabel = quality?.closest('label');
+  if (!qualityLabel || document.getElementById('lightweight-mode')) return;
+
+  let state = readLightweightState();
+  document.documentElement.classList.toggle('lightweight-mode', !!state.enabled);
+
+  const label = document.createElement('label');
+  label.className = 'check';
+  const toggle = document.createElement('input');
+  toggle.id = 'lightweight-mode';
+  toggle.type = 'checkbox';
+  toggle.checked = !!state.enabled;
+  label.append(toggle, document.createTextNode('軽量モード（OBS・Zoom向け）'));
+
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = '15 fps・軽量追跡・手指OFF・描画30 fps・低解像度描画にまとめて切り替えます。解除すると元の設定に戻ります。';
+  qualityLabel.after(label, hint);
+
+  toggle.addEventListener('change', () => {
+    if (toggle.checked) {
+      const fps = settingInput('fps');
+      const trackHands = settingInput('trackHands');
+      state = {
+        enabled: true,
+        previous: {
+          fps: fps?.value || '24',
+          quality: quality.value || 'balanced',
+          trackHands: trackHands?.checked ?? true,
+        },
+      };
+      writeLightweightState(state);
+      document.documentElement.classList.add('lightweight-mode');
+      updateSettingInput(quality, 'light');
+      updateSettingInput(trackHands, false);
+      updateSettingInput(fps, '15');
+      return;
+    }
+
+    const previous = state.previous || {fps:'24', quality:'balanced', trackHands:true};
+    document.documentElement.classList.remove('lightweight-mode');
+    updateSettingInput(quality, previous.quality);
+    updateSettingInput(settingInput('trackHands'), previous.trackHands);
+    updateSettingInput(settingInput('fps'), previous.fps);
+    state = {enabled:false, previous:null};
+    writeLightweightState(state);
+  });
+};
+
+setupLightweightMode();
+
 export class Viewer {
   constructor(stage, {interactive = true, onViewChange = () => {}} = {}) {
     this.stage = stage;
@@ -33,7 +108,7 @@ export class Viewer {
     this.camera.position.set(0, 1, 4);
     this.renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.lightweight ? 1 : Math.min(devicePixelRatio, 2));
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.domElement.setAttribute('aria-label', 'VRMアバター');
     stage.prepend(this.renderer.domElement);
@@ -49,11 +124,19 @@ export class Viewer {
     this.generation = 0;
     this.backgroundTexture = null;
     this.backgroundBitmap = null;
+    this.lastLightweightRender = 0;
+    this.pendingDelta = 0;
     this.resize();
+  }
+  get lightweight() { return document.documentElement.classList.contains('lightweight-mode'); }
+  syncPixelRatio() {
+    const ratio = this.lightweight ? 1 : Math.min(devicePixelRatio, 2);
+    if (this.renderer.getPixelRatio() !== ratio) this.renderer.setPixelRatio(ratio);
   }
   resize() {
     const {clientWidth:width, clientHeight:height} = this.stage;
     if (!width || !height) return;
+    this.syncPixelRatio();
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
@@ -157,7 +240,16 @@ export class Viewer {
     this.setDisplay(settings);
   }
   render(frame, delta, settings, frozen) {
-    if (!frozen) this.avatar?.update(frame, delta, settings);
+    this.syncPixelRatio();
+    this.pendingDelta += delta;
+    if (this.lightweight) {
+      const now = performance.now();
+      if (now - this.lastLightweightRender < 1000 / 30) return;
+      this.lastLightweightRender = now;
+    }
+    const renderDelta = Math.min(.05, this.pendingDelta);
+    this.pendingDelta = 0;
+    if (!frozen) this.avatar?.update(frame, renderDelta, settings);
     this.renderer.render(this.scene, this.camera);
   }
   async save() {
