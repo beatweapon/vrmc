@@ -42,9 +42,20 @@ const initModelControls = async () => {
   const samples = root.querySelector('[data-list="samples"]');
   const stored = root.querySelector('[data-list="stored"]');
   const empty = root.querySelector('.model-picker-empty');
+  let thumbnailUrls = [];
 
+  const clearThumbnailUrls = () => {
+    thumbnailUrls.forEach(url => URL.revokeObjectURL(url));
+    thumbnailUrls = [];
+  };
   const currentName = () => document.getElementById('model-name')?.textContent || '';
-  const localKey = file => `${file.name}\u0000${file.size}\u0000${file.lastModified || 0}`;
+  const thumbnailUrl = thumbnail => {
+    if (!thumbnail) return null;
+    if (typeof thumbnail === 'string') return thumbnail;
+    const url = URL.createObjectURL(thumbnail);
+    thumbnailUrls.push(url);
+    return url;
+  };
 
   const selectFile = file => {
     const transfer = new DataTransfer();
@@ -71,9 +82,10 @@ const initModelControls = async () => {
     button.title = name;
     const preview = document.createElement('span');
     preview.className = 'model-card-preview';
-    if (thumbnail) {
+    const src = thumbnailUrl(thumbnail);
+    if (src) {
       const image = new Image();
-      image.src = thumbnail;
+      image.src = src;
       image.alt = '';
       image.loading = 'lazy';
       preview.append(image);
@@ -90,6 +102,7 @@ const initModelControls = async () => {
   };
 
   const render = async () => {
+    clearThumbnailUrls();
     const selectedName = currentName();
     samples.replaceChildren(...sampleModels.map(model => card({
       name:model.name,
@@ -103,6 +116,7 @@ const initModelControls = async () => {
       stored.replaceChildren(...entries.map(entry => card({
         name:entry.name,
         meta:`${Math.max(.1,entry.size/1024/1024).toFixed(1)} MB`,
+        thumbnail:entry.thumbnail,
         active:selectedName === entry.name,
         onclick:()=>selectFile(entry.file),
       })));
@@ -148,6 +162,7 @@ const initModelControls = async () => {
       toggle.focus();
     }
   });
+  window.addEventListener('pagehide', clearThumbnailUrls, {once:true});
 
   await render();
 };
