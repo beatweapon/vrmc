@@ -163,6 +163,7 @@ export class FullBodyAvatar {
     this.happyUsesEyeBinds = this.happyBindDebug.usesEyeBinds;
     this.happyEyeTargets = this.happyUsesEyeBinds ? [] : findHappyEyeTargets(vrm.scene);
     this.happyEyeApplied = 0;
+    this.happyEyeActive = false;
   }
 
   calibrate(poseResult) {
@@ -281,10 +282,7 @@ export class FullBodyAvatar {
 
   applyHappyEyeMorph() {
     if (!this.happyEyeTargets?.length) return;
-    const raw = clamp01(this.vrm.expressionManager?.getValue('happy') ?? 0);
-    // Fcl_EYE_Joy reaches a fully closed stylized eye at weight 1 on common VRoid models.
-    // Keep the smile visible while capping it before eyelashes collapse/disappear.
-    const amount = Math.min(0.35, raw * 0.55);
+    const amount = this.happyEyeActive ? 1 : 0;
     for (const target of this.happyEyeTargets) {
       if (target.primitive?.morphTargetInfluences) target.primitive.morphTargetInfluences[target.index] = amount;
     }
@@ -384,6 +382,19 @@ export class FullBodyAvatar {
         expressions.blinkLeft = 0;
         expressions.blinkRight = 0;
       }
+
+      // Smiling eyes are an authored expression, not a tracked eyelid pose.
+      // Once a smile is active, ignore real eyelid openness completely so Blink
+      // cannot stack with Joy and push the eye mesh past its intended shape.
+      const rawHappy = holding ? clamp01(expressions.happy) : 0;
+      this.happyEyeActive = this.happyEyeActive ? rawHappy > .08 : rawHappy > .15;
+      expressions.happy = this.happyEyeActive ? 1 : 0;
+      if (this.happyEyeActive) {
+        expressions.blink = 0;
+        expressions.blinkLeft = 0;
+        expressions.blinkRight = 0;
+      }
+
       for (const name of EXPRESSION_NAMES) {
         if (!manager.getExpression(name)) continue;
         const target = holding ? clamp01(expressions[name]) : 0;
@@ -425,7 +436,7 @@ export class FullBodyAvatar {
       `Solver:    ${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(solver[name])}`).join('  ')}`,
       `VRM weight:${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(weights[name])}`).join('  ')}`,
       `Morph max: ${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(morphs[name])}`).join('  ')}`,
-      `manual happy eye: amount=${debugNumber(this.happyEyeApplied)} targets=${manualNames.join(', ') || '(none)'}`,
+      `happy eye fixed=${this.happyEyeActive}  manual amount=${debugNumber(this.happyEyeApplied)}  targets=${manualNames.join(', ') || '(expression bind)'}`,
       `happy overrideMouth=${happy?.overrideMouth ?? '—'}  overrideMouthAmount=${debugNumber(happy?.overrideMouthAmount)}`,
       `ALL overrideMouth total=${debugNumber(overrideTotal)}  => mouth multiplier=${debugNumber(mouthMultiplier)}`,
       `happy original binds: ${bindDebug.originalNames.join(', ') || '(none/unresolved)'}`,
