@@ -36,15 +36,15 @@ const TRACKING_ICONS = {
   fullbody: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4.5" r="2.5"/><path d="M8.4 8.2c.7-.8 1.8-1.2 3.6-1.2s2.9.4 3.6 1.2l2.7 3.1-1.6 1.4-2.2-2.5v4.1l2 6.1-2 .6-2.1-5.2h-.8L9.5 21l-2-.6 2-6.1v-4.1l-2.2 2.5-1.6-1.4 2.7-3.1Z"/></svg>',
   face: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5a8 8 0 0 0-8 8v2.8a8 8 0 0 0 16 0v-2.8a8 8 0 0 0-8-8Zm-3 8.1a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2Zm6 0a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2Zm-6.1 3.1h6.2c-.4 2-1.5 3-3.1 3s-2.7-1-3.1-3Z"/></svg>',
 };
+const FEATHER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.9 3.1c-4.7.5-8.4 2.2-11 5.2-2.1 2.4-3.2 5.2-3.7 8.4l-2.3 2.2 1.4 1.4 2.2-2.2c3.1-.5 5.9-1.7 8.3-3.8 3-2.6 4.7-6.3 5.1-11.2Zm-3.2 3.2c-.9 2.4-2.1 4.3-3.7 5.7-1.4 1.2-3 2.1-4.8 2.7.7-1.8 1.6-3.4 2.8-4.8 1.4-1.6 3.3-2.8 5.7-3.6Z"/></svg>';
 
 const setupPerformanceControls = () => {
   const mode = readTrackingMode();
+  const lightweightState = readLightweightState();
   document.documentElement.classList.toggle('face-only-mode', mode === 'face');
+  document.documentElement.classList.toggle('lightweight-mode', !!lightweightState.enabled);
 
-  if (document.documentElement.classList.contains('output')) {
-    document.documentElement.classList.toggle('lightweight-mode', !!readLightweightState().enabled);
-    return;
-  }
+  if (document.documentElement.classList.contains('output')) return;
   const quality = settingInput('quality');
   const qualityLabel = quality?.closest('label');
   if (!qualityLabel || document.getElementById('lightweight-mode')) return;
@@ -59,6 +59,14 @@ const setupPerformanceControls = () => {
     .tracking-mode-option[aria-pressed="true"]{background:#29483d;border-color:#acedd1;box-shadow:0 0 0 1px #acedd1 inset;color:#f5fffb}
     .tracking-mode-option svg{width:25px;height:25px;fill:currentColor;flex:0 0 auto}
     .tracking-mode-option span{font-size:11px;font-weight:600;white-space:nowrap}
+    .lightweight-quick-control{position:fixed;right:174px;bottom:18px;z-index:7;width:max-content}
+    .lightweight-quick-button{width:44px;height:44px;min-width:44px;min-height:44px;padding:9px;border:1px solid #6c827a;border-radius:9px;background:#172028da;color:#acedd1;display:grid;place-items:center;box-shadow:0 3px 14px #0005;transition:background .15s,border-color .15s,box-shadow .15s,transform .15s}
+    .lightweight-quick-button:hover{background:#26363e;border-color:#91b5a5}
+    .lightweight-quick-button:active{transform:translateY(1px)}
+    .lightweight-quick-button[aria-pressed="true"]{background:#29483d;border-color:#acedd1;box-shadow:0 0 0 1px #acedd1 inset,0 3px 14px #0005;color:#f5fffb}
+    .lightweight-quick-button svg{width:25px;height:25px;fill:currentColor;display:block}
+    .output .lightweight-quick-control{display:none!important}
+    @media(max-width:760px){.lightweight-quick-control{right:168px;bottom:12px}}
   `;
   document.head.appendChild(style);
 
@@ -94,46 +102,33 @@ const setupPerformanceControls = () => {
     restartTracking();
   }));
 
-  let state = readLightweightState();
-  document.documentElement.classList.toggle('lightweight-mode', !!state.enabled);
+  let state = lightweightState;
+  const quickControl = document.createElement('div');
+  quickControl.className = 'lightweight-quick-control';
+  quickControl.innerHTML = `<button id="lightweight-mode" type="button" class="lightweight-quick-button" aria-label="軽量モード" title="軽量モード ${state.enabled?'ON':'OFF'}" aria-pressed="${String(!!state.enabled)}">${FEATHER_ICON}</button>`;
+  document.body.appendChild(quickControl);
+  const toggle = quickControl.querySelector('#lightweight-mode');
 
-  const label = document.createElement('label');
-  label.className = 'check';
-  const toggle = document.createElement('input');
-  toggle.id = 'lightweight-mode';
-  toggle.type = 'checkbox';
-  toggle.checked = !!state.enabled;
-  label.append(toggle, document.createTextNode('軽量モード（OBS・Zoom向け）'));
-
-  const hint = document.createElement('p');
-  hint.className = 'hint';
-  hint.textContent = '15 fps・軽量追跡・描画30 fps・低解像度描画にまとめて切り替えます。手と指の追跡は維持します。解除すると元の設定に戻ります。';
-  qualityLabel.after(label, hint);
-
-  toggle.addEventListener('change', () => {
-    if (toggle.checked) {
+  const setLightweight = enabled => {
+    if (enabled) {
       const fps = settingInput('fps');
-      state = {
-        enabled: true,
-        previous: {
-          fps: fps?.value || '24',
-          quality: quality.value || 'balanced',
-        },
-      };
+      state = {enabled:true,previous:{fps:fps?.value || '24',quality:quality.value || 'balanced'}};
       writeLightweightState(state);
       document.documentElement.classList.add('lightweight-mode');
       updateSettingInput(quality, 'light');
       updateSettingInput(fps, '15');
-      return;
+    } else {
+      const previous = state.previous || {fps:'24',quality:'balanced'};
+      document.documentElement.classList.remove('lightweight-mode');
+      updateSettingInput(quality, previous.quality);
+      updateSettingInput(settingInput('fps'), previous.fps);
+      state = {enabled:false,previous:null};
+      writeLightweightState(state);
     }
-
-    const previous = state.previous || {fps:'24', quality:'balanced'};
-    document.documentElement.classList.remove('lightweight-mode');
-    updateSettingInput(quality, previous.quality);
-    updateSettingInput(settingInput('fps'), previous.fps);
-    state = {enabled:false, previous:null};
-    writeLightweightState(state);
-  });
+    toggle.setAttribute('aria-pressed', String(enabled));
+    toggle.title = `軽量モード ${enabled?'ON':'OFF'}`;
+  };
+  toggle.addEventListener('click', () => setLightweight(toggle.getAttribute('aria-pressed') !== 'true'));
 };
 
 setupPerformanceControls();
