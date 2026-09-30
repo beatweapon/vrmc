@@ -6,6 +6,7 @@ import './background-controls.js';
 import './model-controls.js';
 
 const LIGHTWEIGHT_KEY = 'vrmc.fullbody.lightweight.v1';
+const TRACKING_MODE_KEY = 'vrmc.fullbody.tracking-mode.v1';
 
 const readLightweightState = () => {
   try { return JSON.parse(localStorage.getItem(LIGHTWEIGHT_KEY)) || {enabled:false, previous:null}; }
@@ -15,6 +16,14 @@ const writeLightweightState = state => {
   try { localStorage.setItem(LIGHTWEIGHT_KEY, JSON.stringify(state)); }
   catch { /* The preset still works for the current page. */ }
 };
+const readTrackingMode = () => {
+  try { return localStorage.getItem(TRACKING_MODE_KEY) === 'face' ? 'face' : 'fullbody'; }
+  catch { return 'fullbody'; }
+};
+const writeTrackingMode = mode => {
+  try { localStorage.setItem(TRACKING_MODE_KEY, mode); }
+  catch { /* The mode still works for the current page. */ }
+};
 const settingInput = key => document.querySelector(`[data-setting="${key}"]`);
 const updateSettingInput = (input, value) => {
   if (!input) return;
@@ -23,7 +32,10 @@ const updateSettingInput = (input, value) => {
   input.dispatchEvent(new Event('input', {bubbles:true}));
 };
 
-const setupLightweightMode = () => {
+const setupPerformanceControls = () => {
+  const mode = readTrackingMode();
+  document.documentElement.classList.toggle('face-only-mode', mode === 'face');
+
   if (document.documentElement.classList.contains('output')) {
     document.documentElement.classList.toggle('lightweight-mode', !!readLightweightState().enabled);
     return;
@@ -31,6 +43,27 @@ const setupLightweightMode = () => {
   const quality = settingInput('quality');
   const qualityLabel = quality?.closest('label');
   if (!qualityLabel || document.getElementById('lightweight-mode')) return;
+
+  const modeLabel = document.createElement('label');
+  modeLabel.textContent = 'トラッキングモード';
+  const modeSelect = document.createElement('select');
+  modeSelect.id = 'tracking-mode';
+  modeSelect.append(new Option('Full Body · 顔・体・手指を追跡', 'fullbody'), new Option('Face Only · 顔だけで軽く動かす', 'face'));
+  modeSelect.value = mode;
+  modeLabel.append(modeSelect);
+  const modeHint = document.createElement('p');
+  modeHint.className = 'hint';
+  modeHint.textContent = 'Face Onlyでは体・手のMediaPipe処理を停止し、顔の向きに合わせて上半身を自然に動かします。モード変更は次回カメラ開始時に反映されます。';
+  qualityLabel.before(modeLabel, modeHint);
+
+  const cameraSelect = document.getElementById('cameraId');
+  const syncModeDisabled = () => { modeSelect.disabled = !!cameraSelect?.disabled; };
+  syncModeDisabled();
+  if (cameraSelect) new MutationObserver(syncModeDisabled).observe(cameraSelect, {attributes:true, attributeFilter:['disabled']});
+  modeSelect.addEventListener('change', () => {
+    writeTrackingMode(modeSelect.value);
+    document.documentElement.classList.toggle('face-only-mode', modeSelect.value === 'face');
+  });
 
   let state = readLightweightState();
   document.documentElement.classList.toggle('lightweight-mode', !!state.enabled);
@@ -45,40 +78,36 @@ const setupLightweightMode = () => {
 
   const hint = document.createElement('p');
   hint.className = 'hint';
-  hint.textContent = '15 fps・軽量追跡・手指OFF・描画30 fps・低解像度描画にまとめて切り替えます。解除すると元の設定に戻ります。';
+  hint.textContent = '15 fps・軽量追跡・描画30 fps・低解像度描画にまとめて切り替えます。手と指の追跡は維持します。解除すると元の設定に戻ります。';
   qualityLabel.after(label, hint);
 
   toggle.addEventListener('change', () => {
     if (toggle.checked) {
       const fps = settingInput('fps');
-      const trackHands = settingInput('trackHands');
       state = {
         enabled: true,
         previous: {
           fps: fps?.value || '24',
           quality: quality.value || 'balanced',
-          trackHands: trackHands?.checked ?? true,
         },
       };
       writeLightweightState(state);
       document.documentElement.classList.add('lightweight-mode');
       updateSettingInput(quality, 'light');
-      updateSettingInput(trackHands, false);
       updateSettingInput(fps, '15');
       return;
     }
 
-    const previous = state.previous || {fps:'24', quality:'balanced', trackHands:true};
+    const previous = state.previous || {fps:'24', quality:'balanced'};
     document.documentElement.classList.remove('lightweight-mode');
     updateSettingInput(quality, previous.quality);
-    updateSettingInput(settingInput('trackHands'), previous.trackHands);
     updateSettingInput(settingInput('fps'), previous.fps);
     state = {enabled:false, previous:null};
     writeLightweightState(state);
   });
 };
 
-setupLightweightMode();
+setupPerformanceControls();
 
 export class Viewer {
   constructor(stage, {interactive = true, onViewChange = () => {}} = {}) {
@@ -129,6 +158,7 @@ export class Viewer {
     this.resize();
   }
   get lightweight() { return document.documentElement.classList.contains('lightweight-mode'); }
+  get faceOnly() { return document.documentElement.classList.contains('face-only-mode'); }
   syncPixelRatio() {
     const ratio = this.lightweight ? 1 : Math.min(devicePixelRatio, 2);
     if (this.renderer.getPixelRatio() !== ratio) this.renderer.setPixelRatio(ratio);
@@ -239,6 +269,22 @@ export class Viewer {
     }
     this.setDisplay(settings);
   }
+  applyFaceOnlyTorso(frame, settings) {
+    if (!this.faceOnly || !this.avatar?.rig || !frame.face?.tracked) return;
+    const values = frame.face.headTarget ?? frame.face.head;
+    if (!Array.isArray(values) || values.length !== 4 || !values.every(Number.isFinite)) return;
+    const head = new THREE.Quaternion().fromArray(values).normalize();
+    if (settings.mirrorAvatar === true) head.set(head.x, -head.y, -head.z, head.w);
+    const identity = new THREE.Quaternion();
+    const now = performance.now() / 1000;
+    for (const [name, amount] of [['spine', .12], ['chest', .22], ['upperChest', .32]]) {
+      const rest = this.avatar.rig.rest[name];
+      if (!rest || !this.avatar.rig.bones[name]) continue;
+      const delta = identity.clone().slerp(head, amount);
+      const desired = delta.multiply(rest.world.clone());
+      this.avatar.rig.apply(name, desired, now, now, 1 / 60, settings, false, true);
+    }
+  }
   render(frame, delta, settings, frozen) {
     this.syncPixelRatio();
     this.pendingDelta += delta;
@@ -249,7 +295,10 @@ export class Viewer {
     }
     const renderDelta = Math.min(.05, this.pendingDelta);
     this.pendingDelta = 0;
-    if (!frozen) this.avatar?.update(frame, renderDelta, settings);
+    if (!frozen) {
+      this.avatar?.update(frame, renderDelta, settings);
+      this.applyFaceOnlyTorso(frame, settings);
+    }
     this.renderer.render(this.scene, this.camera);
   }
   async save() {
