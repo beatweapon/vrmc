@@ -1,3 +1,4 @@
+import './camera-controls.js';
 import {sampleModels} from '../models/catalog.js';
 import {modelStore, rememberModel, storedModels} from './settings.js';
 
