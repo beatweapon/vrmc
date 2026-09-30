@@ -56,7 +56,6 @@ const setupPerformanceControls = () => {
   modeHint.textContent = 'Face Onlyでは体・手のMediaPipe処理を停止し、顔の向きに合わせて上半身を自然に動かします。動作中の変更は追跡を自動で再起動して反映します。';
   qualityLabel.before(modeLabel, modeHint);
 
-  const cameraSelect = document.getElementById('cameraId');
   const cameraButton = document.getElementById('camera');
   const connection = document.getElementById('connection');
   const restartTracking = () => {
@@ -67,18 +66,6 @@ const setupPerformanceControls = () => {
       setTimeout(() => cameraButton.click(), 0);
     });
   };
-
-  // app.js historically disables the camera selector while tracking. Camera and
-  // tracking mode changes are safe if we restart the tracking session, so keep
-  // the selectors interactive once the current session has reached the live state.
-  if (cameraSelect) {
-    const keepCameraSelectable = () => {
-      if (connection?.dataset.live === 'true' && cameraSelect.disabled) cameraSelect.disabled = false;
-    };
-    new MutationObserver(keepCameraSelectable).observe(cameraSelect, {attributes:true, attributeFilter:['disabled']});
-    new MutationObserver(keepCameraSelectable).observe(connection, {attributes:true, attributeFilter:['data-live']});
-    cameraSelect.addEventListener('change', restartTracking);
-  }
 
   modeSelect.addEventListener('change', () => {
     writeTrackingMode(modeSelect.value);
