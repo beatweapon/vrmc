@@ -28,8 +28,6 @@ const setting = (settings, name, lo, hi) => clamp(finite(settings?.[name], DEFAU
 function point(landmarks, index, aspect) {
   const p = landmarks[index];
   if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) return null;
-  // Image y is normalized by height; x and z are normalized by width.
-  // Both y and z flip when converting to our right-handed camera space.
   return new Vector3(p.x, -p.y / aspect, -p.z);
 }
 
@@ -38,7 +36,6 @@ function eyeMeasurement(landmarks, indices, irisIndex, aspect, head) {
   if (p.some(v => !v)) return null;
   const width = p[0].distanceTo(p[3]);
   if (width < EPS) return null;
-  // Two independent eyelid distances, divided by eye width, make EAR scale-free.
   const openness = (p[1].distanceTo(p[5]) + p[2].distanceTo(p[4])) / (2 * width);
   if (!Number.isFinite(openness) || openness > 1.5) return null;
   const iris = point(landmarks, irisIndex, aspect);
@@ -49,7 +46,6 @@ function eyeMeasurement(landmarks, indices, irisIndex, aspect, head) {
     const up = new Vector3(0, 1, 0).applyQuaternion(head);
     up.addScaledVector(horizontal, -up.dot(horizontal)).normalize();
     const delta = iris.sub(center);
-    // Width is stable during blinking; dividing pitch by lid height is unstable.
     gaze = {
       yaw: clamp(delta.dot(horizontal) / width * 100, -35, 35),
       pitch: clamp(-delta.dot(up) / width * 100, -25, 25),
@@ -62,10 +58,6 @@ function headFromMatrix(value) {
   const data = value?.data;
   if (!data || data.length !== 16 || !Array.from(data).every(Number.isFinite)) return null;
   if ((value.rows != null && value.rows !== 4) || (value.columns != null && value.columns !== 4)) return null;
-  // MediaPipe's MatrixData and THREE.Matrix4 both use column-major storage.
-  // Face geometry is already camera-right X, up Y, toward-camera Z.
-  // Sources: mediapipe/framework/formats/matrix_data.proto and
-  // mediapipe/tasks/cc/vision/face_geometry/libs/geometry_pipeline.cc.
   const matrix = new Matrix4().fromArray(data);
   const x = new Vector3().setFromMatrixColumn(matrix, 0);
   const y = new Vector3().setFromMatrixColumn(matrix, 1);
@@ -94,12 +86,6 @@ function headFromLandmarks(landmarks, aspect) {
   return new Quaternion().setFromRotationMatrix(new Matrix4().makeBasis(x, y, z)).normalize();
 }
 
-/**
- * Read one MediaPipe FaceLandmarkerResult. Attach imageWidth/imageHeight (or
- * aspectRatio) from the actual inference image for aspect-correct measurements.
- * Output is JSON-serializable; all left/right names are the person's own sides.
- * head: camera-space quaternion [x,y,z,w], gaze: degrees (+yaw right, +pitch down).
- */
 export function measureFace(result) {
   const landmarks = result?.faceLandmarks?.[0];
   if (!Array.isArray(landmarks) || landmarks.length < 468) return null;
@@ -140,7 +126,6 @@ export function measureFace(result) {
     leftEyeOpen: left.openness, rightEyeOpen: right.openness,
     gaze: gaze || { yaw: 0, pitch: 0 }, gazeValid: !!gaze,
     mouthOpen: clamp(lips[0].distanceTo(lips[1]) / mouthWidth, 0, 2),
-    // Unlike image width, this ratio survives moving closer and turning the head.
     mouthWidth: eyeDistance > EPS ? clamp(mouthWidth / eyeDistance, .1, 2) : null,
     blendshapes,
   };
@@ -158,15 +143,6 @@ function quantile(values, fraction = .5) {
   return sorted[Math.floor(index)] * (1 - index % 1) + sorted[Math.ceil(index)] * (index % 1);
 }
 
-/**
- * Persistent calibration schema (version 1):
- * neutralHead [x,y,z,w], neutralGaze {yaw,pitch}, mouthNeutral (mouth EAR),
- * mouthWidthNeutral (optional mouth width / eye-center distance),
- * neutralBlendshapes {name:score}, eyeOpenLeft/Right, eyeClosedLeft/Right.
- * Eye endpoints must be copied into the corresponding settings by the UI.
- * `neutral` only changes neutral fields; eye captures only change their endpoints.
- * Throws a Japanese user-facing error for insufficient/unstable samples.
- */
 export function calibrateFace(samples, kind, previous = {}) {
   if (!['neutral', 'eyesOpen', 'eyesClosed'].includes(kind)) throw new Error('不明なキャリブレーションです。');
   const valid = (Array.isArray(samples) ? samples : []).filter(sample => sample
@@ -223,7 +199,6 @@ export function calibrateFace(samples, kind, previous = {}) {
 
 function eyeBlink(value, settings, side) {
   const closed = setting(settings, `eyeClosed${side}`, 0, .75);
-  // Corrupt or crossed sliders never divide by zero or invert a blink.
   const open = Math.max(closed + .005, setting(settings, `eyeOpen${side}`, .005, .9));
   return 1 - smoothstep((value - closed) / (open - closed));
 }
@@ -231,12 +206,10 @@ function eyeBlink(value, settings, side) {
 function targetHead(measurement, calibration, strength) {
   const q = new Quaternion().fromArray(measurement.head);
   if (validQuaternion(calibration.neutralHead)) {
-    // World delta preserves the camera axes even if neutral was tilted.
     q.multiply(new Quaternion().fromArray(calibration.neutralHead).normalize().invert());
   }
   q.normalize();
   if (q.w < 0) q.set(-q.x, -q.y, -q.z, -q.w);
-  // Scale the rotation angle via a quaternion interpolation, never its components.
   q.copy(new Quaternion().slerp(q, strength));
   const angles = new Euler().setFromQuaternion(q, 'YXZ');
   angles.x = clamp(angles.x, -40 * DEG, 45 * DEG);
@@ -264,28 +237,22 @@ function expressionTargets(measurement, settings, calibration) {
   const widthCalibrated = Number.isFinite(calibration.mouthWidthNeutral) && calibration.mouthWidthNeutral > .1;
   const neutralWidth = clamp(finite(calibration.mouthWidthNeutral, .75), .2, 1.6);
   const relativeWidth = clamp(finite(measurement.mouthWidth, neutralWidth) / neutralWidth, .3, 2);
-  // Express lip separation in *neutral* mouth widths: otherwise narrowing the
-  // lips alone increases mouthOpen and changes a nearly closed "u" into "o".
   const gap = Math.max(0, measurement.mouthOpen * relativeWidth - finite(calibration.mouthNeutral, .025));
   const jaw = score('jawOpen') * (1 - .85 * score('mouthClose'));
   const opening = clamp(Math.max((gap - .015) / .50, jaw * .85));
-  // A person's naturally narrow mouth must not count as pursing before capture.
-  const spreadSignal = Math.max(stretch, smile * .9,
+  // Smile is intentionally excluded here. It is an emotion signal only; using it
+  // as a mouth-width signal turns a smile into a forced ih/ee vowel.
+  const spreadSignal = Math.max(stretch,
     widthCalibrated ? smoothstep((relativeWidth - 1.05) / .30) : 0);
   const roundSignal = Math.max(pucker, funnel,
     widthCalibrated ? smoothstep((.90 - relativeWidth) / .30) : 0);
   const round = smoothstep((roundSignal - .03) / .67);
   const wide = smoothstep((spreadSignal - .04) / .65);
-  // The three shape families sum to one. Aperture independently separates i/e
-  // and u/o, without changing the inferred shape when sensitivity is adjusted.
-  // These are visible lip poses, not phoneme or emotion recognition from audio.
   const wideWeight = (1 - round) * wide;
   const neutralWeight = (1 - round) * (1 - wide);
   const iToE = smoothstep((opening - .10) / .45);
   const uToO = smoothstep((opening - .14) / .48);
   const parted = smoothstep((gap - .008) / .045);
-  // A pursed "u" and a narrow-gap "i" must be visible even with a closed jaw.
-  // A closed-lip smile remains an emotion; it does not force the mouth open.
   const wideAmount = Math.max(opening, spreadSignal * parted);
   const roundAmount = Math.max(opening, roundSignal);
   const vowels = {
@@ -306,14 +273,10 @@ function expressionTargets(measurement, settings, calibration) {
     average('noseSneerLeft', 'noseSneerRight'));
   output.happy = smoothstep((smile - .04) / .66) * strength
     * setting(settings, 'smileStrength', 0, 2);
-  // Lowered brows carry the visible angry pose. Pressed lips or a nose wrinkle
-  // add support, rather than being a mandatory second gesture.
   output.angry = smoothstep((browDown * (.85 + .15 * tension) - .04) / .66) * strength
     * setting(settings, 'angryStrength', 0, 2);
   output.sad = smoothstep((Math.min(average('mouthFrownLeft', 'mouthFrownRight'),
     score('browInnerUp')) - .04) / .66) * strength;
-  // Talking/yawning alone must not trigger surprise. Both raised brows and
-  // widened eyes are required; outer-brow raising works as well as inner-brow.
   output.surprised = Math.sqrt(smoothstep((browUp - .08) / .62)
     * smoothstep((eyeWide - .05) / .60)) * strength
     * setting(settings, 'surpriseStrength', 0, 2);
@@ -355,14 +318,11 @@ export class FaceSolver {
       const initialized = this.initialized;
       this.head.slerp(target, initialized ? alpha(dt, smoothing) : 1).normalize();
       for (const name of EXPRESSION_NAMES) {
-        // Eyelids need a fast closing response even when head smoothing is high.
         const tau = name.startsWith('blink')
           ? Math.min(smoothing, expressions[name] > this.expressions[name] ? .016 : .045)
           : smoothing;
         this.expressions[name] += (expressions[name] - this.expressions[name]) * (initialized ? alpha(dt, tau) : 1);
       }
-      // Freeze the *rendered* gaze throughout either eye's closing and reopening.
-      // MediaPipe often reports centered iris/look scores during this interval.
       if (!closed && now >= this.gazeHoldUntil && measurement.gazeValid) {
         const strength = setting(settings, 'gazeStrength', 0, 2);
         for (const [axis, limit] of [['yaw', 35], ['pitch', 25]]) {
