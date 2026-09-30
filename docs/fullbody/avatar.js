@@ -16,10 +16,11 @@ const isEyeMorph = name => /^Fcl_EYE_/i.test(name)
   || /(^|[_\-.])(eye|eyes|eyelid|lid)([_\-.]|$)/i.test(name);
 const keepHappyEyeBinds = manager => {
   const happy = manager?.getExpression('happy');
-  if (!happy || !Array.isArray(happy.binds)) return false;
-  const eyeBinds = happy.binds.filter(bind => Array.isArray(bind.primitives)
+  if (!happy || !Array.isArray(happy.binds) || typeof happy.deleteBind !== 'function') return false;
+  const binds = [...happy.binds];
+  const eyeBinds = binds.filter(bind => Array.isArray(bind.primitives)
     && bind.primitives.some(primitive => isEyeMorph(morphTargetName(primitive, bind.index))));
-  happy.binds = eyeBinds;
+  for (const bind of binds) if (!eyeBinds.includes(bind)) happy.deleteBind(bind);
   return eyeBinds.length > 0;
 };
 const posePoint = point => point && [point.x, point.y, point.z].every(Number.isFinite)
