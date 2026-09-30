@@ -32,6 +32,11 @@ const updateSettingInput = (input, value) => {
   input.dispatchEvent(new Event('input', {bubbles:true}));
 };
 
+const TRACKING_ICONS = {
+  fullbody: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4.5" r="2.5"/><path d="M8.4 8.2c.7-.8 1.8-1.2 3.6-1.2s2.9.4 3.6 1.2l2.7 3.1-1.6 1.4-2.2-2.5v4.1l2 6.1-2 .6-2.1-5.2h-.8L9.5 21l-2-.6 2-6.1v-4.1l-2.2 2.5-1.6-1.4 2.7-3.1Z"/></svg>',
+  face: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5a8 8 0 0 0-8 8v2.8a8 8 0 0 0 16 0v-2.8a8 8 0 0 0-8-8Zm-3 8.1a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2Zm6 0a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2Zm-6.1 3.1h6.2c-.4 2-1.5 3-3.1 3s-2.7-1-3.1-3Z"/></svg>',
+};
+
 const setupPerformanceControls = () => {
   const mode = readTrackingMode();
   document.documentElement.classList.toggle('face-only-mode', mode === 'face');
@@ -44,17 +49,26 @@ const setupPerformanceControls = () => {
   const qualityLabel = quality?.closest('label');
   if (!qualityLabel || document.getElementById('lightweight-mode')) return;
 
-  const modeLabel = document.createElement('label');
-  modeLabel.textContent = 'トラッキングモード';
-  const modeSelect = document.createElement('select');
-  modeSelect.id = 'tracking-mode';
-  modeSelect.append(new Option('Full Body · 顔・体・手指を追跡', 'fullbody'), new Option('Face Only · 顔だけで軽く動かす', 'face'));
-  modeSelect.value = mode;
-  modeLabel.append(modeSelect);
+  const style = document.createElement('style');
+  style.textContent = `
+    .tracking-mode-control{display:block;margin:12px 0 6px}
+    .tracking-mode-title{display:block;margin-bottom:7px;font-size:11px;color:#bdc9d1}
+    .tracking-mode-options{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .tracking-mode-option{display:flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:8px 10px;border:1px solid #45555d;border-radius:9px;background:#182127;color:#c8d2d7;cursor:pointer;transition:background .15s,border-color .15s,box-shadow .15s,color .15s}
+    .tracking-mode-option:hover{background:#223039;border-color:#71887e}
+    .tracking-mode-option[aria-pressed="true"]{background:#29483d;border-color:#acedd1;box-shadow:0 0 0 1px #acedd1 inset;color:#f5fffb}
+    .tracking-mode-option svg{width:25px;height:25px;fill:currentColor;flex:0 0 auto}
+    .tracking-mode-option span{font-size:11px;font-weight:600;white-space:nowrap}
+  `;
+  document.head.appendChild(style);
+
+  const modeControl = document.createElement('div');
+  modeControl.className = 'tracking-mode-control';
+  modeControl.innerHTML = `<span class="tracking-mode-title">トラッキングモード</span><div class="tracking-mode-options" role="group" aria-label="トラッキングモード"><button type="button" class="tracking-mode-option" data-mode="fullbody">${TRACKING_ICONS.fullbody}<span>Full Body</span></button><button type="button" class="tracking-mode-option" data-mode="face">${TRACKING_ICONS.face}<span>Face Only</span></button></div>`;
   const modeHint = document.createElement('p');
   modeHint.className = 'hint';
-  modeHint.textContent = 'Face Onlyでは体・手のMediaPipe処理を停止し、顔の向きに合わせて上半身を自然に動かします。動作中の変更は追跡を自動で再起動して反映します。';
-  qualityLabel.before(modeLabel, modeHint);
+  modeHint.textContent = 'Face Onlyでは体・手のMediaPipe処理を停止し、顔の向きに上半身全体を追従させます。動作中の変更は追跡を自動で再起動して反映します。';
+  qualityLabel.before(modeControl, modeHint);
 
   const cameraButton = document.getElementById('camera');
   const connection = document.getElementById('connection');
@@ -66,12 +80,19 @@ const setupPerformanceControls = () => {
       setTimeout(() => cameraButton.click(), 0);
     });
   };
-
-  modeSelect.addEventListener('change', () => {
-    writeTrackingMode(modeSelect.value);
-    document.documentElement.classList.toggle('face-only-mode', modeSelect.value === 'face');
+  const modeButtons = [...modeControl.querySelectorAll('[data-mode]')];
+  const setMode = nextMode => {
+    writeTrackingMode(nextMode);
+    document.documentElement.classList.toggle('face-only-mode', nextMode === 'face');
+    modeButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mode === nextMode)));
+  };
+  setMode(mode);
+  modeButtons.forEach(button => button.addEventListener('click', () => {
+    const nextMode = button.dataset.mode;
+    if (nextMode === readTrackingMode()) return;
+    setMode(nextMode);
     restartTracking();
-  });
+  }));
 
   let state = readLightweightState();
   document.documentElement.classList.toggle('lightweight-mode', !!state.enabled);
@@ -277,7 +298,7 @@ export class Viewer {
     }
     this.setDisplay(settings);
   }
-  applyFaceOnlyTorso(frame, settings) {
+  applyFaceOnlyTorso(frame, settings, dt) {
     if (!this.faceOnly || !this.avatar?.rig || !frame.face?.tracked) return;
     const values = frame.face.headTarget ?? frame.face.head;
     if (!Array.isArray(values) || values.length !== 4 || !values.every(Number.isFinite)) return;
@@ -285,12 +306,15 @@ export class Viewer {
     if (settings.mirrorAvatar === true) head.set(head.x, -head.y, -head.z, head.w);
     const identity = new THREE.Quaternion();
     const now = performance.now() / 1000;
-    for (const [name, amount] of [['spine', .12], ['chest', .22], ['upperChest', .32]]) {
+    // Face Only deliberately moves the torso much more than Full Body's subtle
+    // correction. The hierarchy then carries the shoulders and arms with it,
+    // avoiding the impression that only the neck is animated.
+    for (const [name, amount] of [['spine', .24], ['chest', .4], ['upperChest', .56]]) {
       const rest = this.avatar.rig.rest[name];
       if (!rest || !this.avatar.rig.bones[name]) continue;
       const delta = identity.clone().slerp(head, amount);
       const desired = delta.multiply(rest.world.clone());
-      this.avatar.rig.apply(name, desired, now, now, 1 / 60, settings, false, true);
+      this.avatar.rig.apply(name, desired, now, now, dt, settings, false, true);
     }
   }
   render(frame, delta, settings, frozen) {
@@ -305,7 +329,7 @@ export class Viewer {
     this.pendingDelta = 0;
     if (!frozen) {
       this.avatar?.update(frame, renderDelta, settings);
-      this.applyFaceOnlyTorso(frame, settings);
+      this.applyFaceOnlyTorso(frame, settings, renderDelta);
     }
     this.renderer.render(this.scene, this.camera);
   }
