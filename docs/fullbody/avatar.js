@@ -10,6 +10,18 @@ import { dampQuaternion, dampVector } from './motion.js';
 const EXPRESSION_NAMES = ['blink', 'blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh', 'happy', 'angry', 'sad', 'relaxed', 'surprised'];
 const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 const finiteQuaternion = value => Array.isArray(value) && value.length === 4 && value.every(Number.isFinite);
+const morphTargetName = (primitive, index) => Object.entries(primitive?.morphTargetDictionary || {})
+  .find(([, targetIndex]) => targetIndex === index)?.[0] || '';
+const isEyeMorph = name => /^Fcl_EYE_/i.test(name)
+  || /(^|[_\-.])(eye|eyes|eyelid|lid)([_\-.]|$)/i.test(name);
+const keepHappyEyeBinds = manager => {
+  const happy = manager?.getExpression('happy');
+  if (!happy || !Array.isArray(happy.binds)) return false;
+  const eyeBinds = happy.binds.filter(bind => Array.isArray(bind.primitives)
+    && bind.primitives.some(primitive => isEyeMorph(morphTargetName(primitive, bind.index))));
+  happy.binds = eyeBinds;
+  return eyeBinds.length > 0;
+};
 const posePoint = point => point && [point.x, point.y, point.z].every(Number.isFinite)
   ? new Vector3(point.x, -point.y, -point.z) : null;
 const poseMidpoint = (points, a, b) => posePoint(points?.[a])?.add(posePoint(points?.[b])).multiplyScalar(0.5) ?? null;
@@ -96,6 +108,9 @@ export class FullBodyAvatar {
       const expression = vrm.expressionManager?.getExpression(name);
       if (expression) expression.overrideLookAt = 'none';
     }
+    // Keep the model-authored smiling eyes, but do not let `happy` modify the
+    // mouth. Vowels and mouth shape continue to come exclusively from face tracking.
+    this.happyUsesEyeBinds = keepHappyEyeBinds(vrm.expressionManager);
   }
 
   calibrate(poseResult) {
