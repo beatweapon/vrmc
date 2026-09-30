@@ -4,9 +4,9 @@ const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value 
 // Keep smile detection, but render it as a gentle eye squint so mouth aperture
 // remains controlled by the camera-derived vowel expressions.
 export const smileEyesOnly = face => {
-  if (!face?.expressions) return face;
+  if (!face?.expressions || !('happy' in face.expressions)) return face;
   const happy = clamp01(face.expressions.happy);
-  if (happy <= 0 && face.expressions.happy === 0) return face;
+  if (happy <= 0) return face;
 
   const squint = happy * .35;
   return {
