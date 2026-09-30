@@ -3,8 +3,8 @@ const smoothstep = value => { const t = clamp01(value); return t * t * (3 - 2 * 
 
 // VRM `happy` is authored per model and can contain mouth deformation that is
 // unrelated to the camera-observed mouth. Never apply the authored happy preset
-// itself. Drive smiling eyes from MediaPipe's eyeSquint signals, with the mouth-
-// derived happy score only as a weak fallback when eyeSquint is unavailable.
+// itself. Expose a separate eyeSmile value so the viewer can drive an eye-only
+// morph such as VRoid's Fcl_EYE_Joy when the model provides one.
 //
 // MediaPipe can also report strong mouth stretch while laughing. When the
 // camera-observed mouth is clearly open vertically, prefer the neutral-open
@@ -21,13 +21,15 @@ export const smileEyesOnly = face => {
   const eyeSquint = side => {
     const raw = blendshapes[`eyeSquint${side}`];
     if (!Number.isFinite(raw)) return null;
-    return smoothstep((raw - .08) / .62) * .5;
+    return smoothstep((raw - .08) / .62);
   };
-  const fallbackSquint = happy * .25;
   const leftSquint = eyeSquint('Left');
   const rightSquint = eyeSquint('Right');
-  expressions.blinkLeft = Math.max(clamp01(expressions.blinkLeft), leftSquint ?? fallbackSquint);
-  expressions.blinkRight = Math.max(clamp01(expressions.blinkRight), rightSquint ?? fallbackSquint);
+  const eyeSmile = clamp01(Math.max(
+    happy,
+    leftSquint ?? 0,
+    rightSquint ?? 0,
+  ));
 
   const mouthOpen = face.measurement?.mouthOpen;
   if (Number.isFinite(mouthOpen)) {
@@ -49,5 +51,5 @@ export const smileEyesOnly = face => {
     }
   }
 
-  return {...face, expressions};
+  return {...face, expressions, eyeSmile};
 };
