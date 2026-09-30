@@ -2,8 +2,9 @@ const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value 
 const smoothstep = value => { const t = clamp01(value); return t * t * (3 - 2 * t); };
 
 // VRM `happy` is authored per model and can contain mouth deformation that is
-// unrelated to the camera-observed mouth. Keep smile detection for a gentle eye
-// squint, but never apply the authored happy preset itself.
+// unrelated to the camera-observed mouth. Never apply the authored happy preset
+// itself. Drive smiling eyes from MediaPipe's eyeSquint signals, with the mouth-
+// derived happy score only as a weak fallback when eyeSquint is unavailable.
 //
 // MediaPipe can also report strong mouth stretch while laughing. When the
 // camera-observed mouth is clearly open vertically, prefer the neutral-open
@@ -16,11 +17,17 @@ export const smileEyesOnly = face => {
   const happy = clamp01(expressions.happy);
   expressions.happy = 0;
 
-  if (happy > 0) {
-    const squint = happy * .35;
-    expressions.blinkLeft = Math.max(clamp01(expressions.blinkLeft), squint);
-    expressions.blinkRight = Math.max(clamp01(expressions.blinkRight), squint);
-  }
+  const blendshapes = face.measurement?.blendshapes ?? {};
+  const eyeSquint = side => {
+    const raw = blendshapes[`eyeSquint${side}`];
+    if (!Number.isFinite(raw)) return null;
+    return smoothstep((raw - .08) / .62) * .5;
+  };
+  const fallbackSquint = happy * .25;
+  const leftSquint = eyeSquint('Left');
+  const rightSquint = eyeSquint('Right');
+  expressions.blinkLeft = Math.max(clamp01(expressions.blinkLeft), leftSquint ?? fallbackSquint);
+  expressions.blinkRight = Math.max(clamp01(expressions.blinkRight), rightSquint ?? fallbackSquint);
 
   const mouthOpen = face.measurement?.mouthOpen;
   if (Number.isFinite(mouthOpen)) {
