@@ -59,6 +59,10 @@ const setupPerformanceControls = () => {
     .tracking-mode-option[aria-pressed="true"]{background:#29483d;border-color:#acedd1;box-shadow:0 0 0 1px #acedd1 inset;color:#f5fffb}
     .tracking-mode-option svg{width:25px;height:25px;fill:currentColor;flex:0 0 auto}
     .tracking-mode-option span{font-size:11px;font-weight:600;white-space:nowrap}
+    .processing-mode-status{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 12px;padding:10px 12px;border:1px solid #303b43;border-radius:8px;background:#141c21}
+    .processing-mode-status span{font-size:11px;color:#9eabb3}
+    .processing-mode-status strong{font-size:11px;color:#dce5e9}
+    .lightweight-mode .processing-mode-status strong{color:#acedd1}
     .lightweight-quick-control{position:fixed;right:174px;bottom:18px;z-index:7;width:max-content}
     .lightweight-quick-button{width:44px;height:44px;min-width:44px;min-height:44px;padding:9px;border:1px solid #6c827a;border-radius:9px;background:#172028da;color:#acedd1;display:grid;place-items:center;box-shadow:0 3px 14px #0005;transition:background .15s,border-color .15s,box-shadow .15s,transform .15s}
     .lightweight-quick-button:hover{background:#26363e;border-color:#91b5a5}
@@ -77,6 +81,11 @@ const setupPerformanceControls = () => {
   modeHint.className = 'hint';
   modeHint.textContent = 'Face Onlyでは体・手のMediaPipe処理を停止し、顔の向きに上半身を少し追従させます。動作中の変更は追跡を自動で再起動して反映します。';
   qualityLabel.before(modeControl, modeHint);
+
+  const processingStatus = document.createElement('div');
+  processingStatus.className = 'processing-mode-status';
+  processingStatus.innerHTML = `<span>処理モード</span><strong>${lightweightState.enabled ? '軽量' : '標準'}</strong>`;
+  qualityLabel.replaceWith(processingStatus);
 
   const cameraButton = document.getElementById('camera');
   const connection = document.getElementById('connection');
@@ -125,6 +134,7 @@ const setupPerformanceControls = () => {
       state = {enabled:false,previous:null};
       writeLightweightState(state);
     }
+    processingStatus.querySelector('strong').textContent = enabled ? '軽量' : '標準';
     toggle.setAttribute('aria-pressed', String(enabled));
     toggle.title = `軽量モード ${enabled?'ON':'OFF'}`;
   };
