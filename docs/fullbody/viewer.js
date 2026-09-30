@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {FullBodyAvatar} from './avatar.js';
 import {sampleModels} from '../models/catalog.js';
+import {smileEyesOnly} from './smile-expression.js';
 import './background-controls.js';
 import './model-controls.js';
 
@@ -141,7 +142,10 @@ export class Viewer {
     this.setDisplay(settings);
   }
   render(frame, delta, settings, frozen) {
-    if (!frozen) this.avatar?.update(frame, delta, settings);
+    if (!frozen && this.avatar) {
+      const renderedFrame = frame?.face ? {...frame, face:smileEyesOnly(frame.face)} : frame;
+      this.avatar.update(renderedFrame, delta, settings);
+    }
     this.renderer.render(this.scene, this.camera);
   }
   async save() {
