@@ -169,8 +169,11 @@ export class Viewer {
   render(frame, delta, settings, frozen) {
     if (!frozen && this.avatar) {
       let renderedFace = frame?.face ? smileEyesOnly(frame.face) : null;
-      if (renderedFace && !this.eyeSmileMorphs.length && renderedFace.eyeSmile > 0) {
-        const squint = renderedFace.eyeSmile * .35;
+      if (renderedFace?.eyeSmile > 0) {
+        // Prefer an authored eye-only joy morph when the model has one, but keep
+        // a light eyelid fallback as insurance for models where the morph is
+        // absent, ineffective, or only affects part of the eye area.
+        const squint = renderedFace.eyeSmile * .22;
         renderedFace = {...renderedFace, expressions:{
           ...renderedFace.expressions,
           blinkLeft:Math.max(renderedFace.expressions.blinkLeft ?? 0, squint),
