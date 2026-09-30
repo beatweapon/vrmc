@@ -4,6 +4,11 @@ import {
 
 const WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
 const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task';
+const TRACKING_MODE_KEY = 'vrmc.fullbody.tracking-mode.v1';
+const trackingMode = () => {
+  try { return localStorage.getItem(TRACKING_MODE_KEY) === 'face' ? 'face' : 'fullbody'; }
+  catch { return 'fullbody'; }
+};
 
 /** Camera ownership stays with the caller; this class owns inference only. */
 export class Tracker {
@@ -17,19 +22,21 @@ export class Tracker {
 
   async start(video, { fps = 24, trackHands = true, quality = 'balanced' } = {}) {
     this.stop();
-    if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' ||
-        typeof createImageBitmap !== 'function') {
+    const mode = trackingMode();
+    if (mode === 'fullbody' && (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' ||
+        typeof createImageBitmap !== 'function')) {
       throw new Error('このブラウザーは全身追跡に対応していません。最新版の Chrome または Edge で開いてください。');
     }
     if (!video) throw new Error('追跡するカメラ映像がありません。カメラを選び直してください。');
 
     const session = {
       video,
+      mode,
       fps: normalizeFps(fps),
       trackHands: Boolean(trackHands),
       quality: ['light', 'lite', 'performance'].includes(quality) ? 'light' : 'balanced',
       worker: null,
-      workerReady: false,
+      workerReady: mode === 'face',
       faceLandmarker: null,
       faceReady: false,
       faceHandle: null,
@@ -54,7 +61,7 @@ export class Tracker {
       session.startupTimer = setTimeout(() => {
         this._fail(session, new Error('追跡モデルの読み込みがタイムアウトしました。通信環境を確認して、もう一度開始してください。'));
       }, 120000);
-      this._launchWorker(session, 'GPU');
+      if (mode === 'fullbody') this._launchWorker(session, 'GPU');
       this._launchFace(session);
     });
   }
@@ -135,7 +142,7 @@ export class Tracker {
   }
 
   _launchWorker(session, delegate) {
-    if (this._session !== session) return;
+    if (this._session !== session || session.mode !== 'fullbody') return;
     let worker;
     try {
       worker = new Worker(new URL('./tracking-worker.js', import.meta.url), { type: 'module' });
@@ -155,10 +162,6 @@ export class Tracker {
           clearTimeout(session.inferenceTimer);
           session.busy = false;
           const result = data.result;
-          // app.js historically receives one coherent object containing face,
-          // pose and hands. Keep that contract while face inference runs on its
-          // own main-thread cadence. receiveFace() ignores older body timestamps,
-          // so the independently delivered face packet remains authoritative.
           if (session.latestFace) result.face = session.latestFace;
           if (!session.trackHands) delete result.hands;
           this._notify(this.onResults, result);
@@ -190,21 +193,21 @@ export class Tracker {
     clearTimeout(session.startupTimer);
     session.resolve?.();
     session.resolve = session.reject = null;
-    this._notify(this.onStatus, '全身追跡中');
-    // Yield back to startCamera() before body results begin arriving. Face has
-    // its own requestAnimationFrame loop and can populate the first face state.
-    session.frameTimer = setTimeout(() => this._schedule(session, 0), 0);
+    this._notify(this.onStatus, session.mode === 'face' ? '顔追跡中' : '全身追跡中');
+    if (session.mode === 'fullbody') {
+      session.frameTimer = setTimeout(() => this._schedule(session, 0), 0);
+    }
   }
 
   _schedule(session, delay) {
-    if (this._session !== session || !session.ready || session.busy) return;
+    if (this._session !== session || session.mode !== 'fullbody' || !session.ready || session.busy) return;
     clearTimeout(session.frameTimer);
     const wait = delay ?? Math.max(0, session.lastCaptureAt + 1000 / session.fps - performance.now());
     session.frameTimer = setTimeout(() => this._capture(session), wait);
   }
 
   async _capture(session) {
-    if (this._session !== session || session.busy) return;
+    if (this._session !== session || session.mode !== 'fullbody' || session.busy) return;
     const video = session.video;
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight ||
         video.currentTime === session.lastVideoTime) {
