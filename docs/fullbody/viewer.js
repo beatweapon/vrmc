@@ -36,7 +36,7 @@ const TRACKING_ICONS = {
   fullbody: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4.5" r="2.5"/><path d="M8.4 8.2c.7-.8 1.8-1.2 3.6-1.2s2.9.4 3.6 1.2l2.7 3.1-1.6 1.4-2.2-2.5v4.1l2 6.1-2 .6-2.1-5.2h-.8L9.5 21l-2-.6 2-6.1v-4.1l-2.2 2.5-1.6-1.4 2.7-3.1Z"/></svg>',
   face: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5a8 8 0 0 0-8 8v2.8a8 8 0 0 0 16 0v-2.8a8 8 0 0 0-8-8Zm-3 8.1a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2Zm6 0a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2Zm-6.1 3.1h6.2c-.4 2-1.5 3-3.1 3s-2.7-1-3.1-3Z"/></svg>',
 };
-const FEATHER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.9 3.1c-4.7.5-8.4 2.2-11 5.2-2.1 2.4-3.2 5.2-3.7 8.4l-2.3 2.2 1.4 1.4 2.2-2.2c3.1-.5 5.9-1.7 8.3-3.8 3-2.6 4.7-6.3 5.1-11.2Zm-3.2 3.2c-.9 2.4-2.1 4.3-3.7 5.7-1.4 1.2-3 2.1-4.8 2.7.7-1.8 1.6-3.4 2.8-4.8 1.4-1.6 3.3-2.8 5.7-3.6Z"/></svg>';
+const FEATHER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5Z"/><path d="M16 8 2 22"/><path d="M17.5 15H9"/></svg>';
 
 const setupPerformanceControls = () => {
   const mode = readTrackingMode();
@@ -64,7 +64,7 @@ const setupPerformanceControls = () => {
     .lightweight-quick-button:hover{background:#26363e;border-color:#91b5a5}
     .lightweight-quick-button:active{transform:translateY(1px)}
     .lightweight-quick-button[aria-pressed="true"]{background:#29483d;border-color:#acedd1;box-shadow:0 0 0 1px #acedd1 inset,0 3px 14px #0005;color:#f5fffb}
-    .lightweight-quick-button svg{width:25px;height:25px;fill:currentColor;display:block}
+    .lightweight-quick-button svg{width:25px;height:25px;display:block}
     .output .lightweight-quick-control{display:none!important}
     @media(max-width:760px){.lightweight-quick-control{right:168px;bottom:12px}}
   `;
