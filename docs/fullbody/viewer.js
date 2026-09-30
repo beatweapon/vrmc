@@ -67,7 +67,7 @@ const setupPerformanceControls = () => {
   modeControl.innerHTML = `<span class="tracking-mode-title">トラッキングモード</span><div class="tracking-mode-options" role="group" aria-label="トラッキングモード"><button type="button" class="tracking-mode-option" data-mode="fullbody">${TRACKING_ICONS.fullbody}<span>Full Body</span></button><button type="button" class="tracking-mode-option" data-mode="face">${TRACKING_ICONS.face}<span>Face Only</span></button></div>`;
   const modeHint = document.createElement('p');
   modeHint.className = 'hint';
-  modeHint.textContent = 'Face Onlyでは体・手のMediaPipe処理を停止し、顔の向きに上半身全体を追従させます。動作中の変更は追跡を自動で再起動して反映します。';
+  modeHint.textContent = 'Face Onlyでは体・手のMediaPipe処理を停止し、顔の向きに上半身を少し追従させます。動作中の変更は追跡を自動で再起動して反映します。';
   qualityLabel.before(modeControl, modeHint);
 
   const cameraButton = document.getElementById('camera');
@@ -143,11 +143,7 @@ export class Viewer {
     this.stage = stage;
     this.scene = new THREE.Scene();
 
-    // Keep a soft base light so faces and dark materials do not fall into shadow.
     this.scene.add(new THREE.AmbientLight(0xffffff, .75));
-
-    // Use the main light direction from the Kalidoface-inspired rig, but avoid
-    // realtime shadow maps here because full-body tracking is performance-sensitive.
     const lightRig = new THREE.Group();
     lightRig.position.set(0, 1, 0);
     const keyPivot = new THREE.Group();
@@ -158,8 +154,6 @@ export class Viewer {
     keyPivot.rotation.y = Math.PI * 2 * .64;
     keyPivot.rotation.x = Math.PI * .75;
     this.scene.add(lightRig);
-
-    // A subtle warm fill keeps the result from looking uniformly white/flat.
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0xdc8874, .3));
 
     this.camera = new THREE.PerspectiveCamera(32, 1, .01, 100);
@@ -263,9 +257,7 @@ export class Viewer {
   getPose() {
     const vrm = this.avatar?.vrm;
     if (!vrm) return null;
-    return {bones:vrm.humanoid.getNormalizedPose(),
-      expressions:Object.fromEntries((vrm.expressionManager?.expressions || []).map(expression => [expression.expressionName,vrm.expressionManager.getValue(expression.expressionName)])),
-      gaze:vrm.lookAt ? {yaw:vrm.lookAt.yaw,pitch:vrm.lookAt.pitch} : null};
+    return {bones:vrm.humanoid.getNormalizedPose(), expressions:Object.fromEntries((vrm.expressionManager?.expressions || []).map(expression => [expression.expressionName,vrm.expressionManager.getValue(expression.expressionName)])), gaze:vrm.lookAt ? {yaw:vrm.lookAt.yaw,pitch:vrm.lookAt.pitch} : null};
   }
   setPose(pose) {
     const vrm = this.avatar?.vrm;
@@ -276,12 +268,8 @@ export class Viewer {
     vrm.update(0);
   }
   setDisplay(settings) {
-    if (settings.background === 'image') {
-      this.scene.background = this.backgroundTexture;
-      return;
-    }
-    this.scene.background = settings.background === 'transparent' ? null : new THREE.Color(
-      settings.background === 'green' ? '#00ff00' : settings.background === 'blue' ? '#0000ff' : settings.backgroundColor);
+    if (settings.background === 'image') { this.scene.background = this.backgroundTexture; return; }
+    this.scene.background = settings.background === 'transparent' ? null : new THREE.Color(settings.background === 'green' ? '#00ff00' : settings.background === 'blue' ? '#0000ff' : settings.backgroundColor);
   }
   async setBackgroundImage(file, settings) {
     this.backgroundTexture?.dispose();
@@ -306,10 +294,7 @@ export class Viewer {
     if (settings.mirrorAvatar === true) head.set(head.x, -head.y, -head.z, head.w);
     const identity = new THREE.Quaternion();
     const now = performance.now() / 1000;
-    // Face Only deliberately moves the torso much more than Full Body's subtle
-    // correction. The hierarchy then carries the shoulders and arms with it,
-    // avoiding the impression that only the neck is animated.
-    for (const [name, amount] of [['spine', .24], ['chest', .4], ['upperChest', .56]]) {
+    for (const [name, amount] of [['spine', .12], ['chest', .22], ['upperChest', .32]]) {
       const rest = this.avatar.rig.rest[name];
       if (!rest || !this.avatar.rig.bones[name]) continue;
       const delta = identity.clone().slerp(head, amount);
