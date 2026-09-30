@@ -439,7 +439,7 @@ export class FullBodyAvatar {
     if (!this.vrm) return;
     this.debugPanel?.remove();
     this.scene.remove(this.vrm.scene);
-    VRMUtils.deepDispose(vrm.scene);
+    VRMUtils.deepDispose(this.vrm.scene);
     this.vrm = null;
   }
 }
