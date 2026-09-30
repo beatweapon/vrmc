@@ -3,6 +3,7 @@ import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {FullBodyAvatar} from './avatar.js';
 import {sampleModels} from '../models/catalog.js';
 import './background-controls.js';
+import './model-controls.js';
 
 export class Viewer {
   constructor(stage, {interactive = true, onViewChange = () => {}} = {}) {
