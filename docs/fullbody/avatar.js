@@ -8,6 +8,7 @@ import { mirrorBodyInput, mirrorFaceMotion } from './mirror-motion.js';
 import { dampQuaternion, dampVector } from './motion.js';
 
 const EXPRESSION_NAMES = ['blink', 'blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh', 'happy', 'angry', 'sad', 'relaxed', 'surprised'];
+const MOUTH_NAMES = ['aa', 'ih', 'ou', 'ee', 'oh'];
 const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 const finiteQuaternion = value => Array.isArray(value) && value.length === 4 && value.every(Number.isFinite);
 const morphTargetName = (primitive, index) => Object.entries(primitive?.morphTargetDictionary || {})
@@ -22,6 +23,24 @@ const keepHappyEyeBinds = manager => {
     && bind.primitives.some(primitive => isEyeMorph(morphTargetName(primitive, bind.index))));
   for (const bind of binds) if (!eyeBinds.includes(bind)) happy.deleteBind(bind);
   return eyeBinds.length > 0;
+};
+const debugNumber = value => Number.isFinite(value) ? value.toFixed(3) : '—';
+const bindMorphNames = expression => [...new Set((expression?.binds || []).flatMap(bind =>
+  (bind.primitives || []).map(primitive => morphTargetName(primitive, bind.index)).filter(Boolean)))];
+const appliedMorphValue = expression => Math.max(0, ...(expression?.binds || []).flatMap(bind =>
+  (bind.primitives || []).map(primitive => primitive?.morphTargetInfluences?.[bind.index] || 0)));
+const createFaceDebugPanel = () => {
+  if (typeof document === 'undefined' || new URLSearchParams(location.search).get('output') === '1') return null;
+  const panel = document.createElement('pre');
+  panel.id = 'face-expression-debug';
+  Object.assign(panel.style, {
+    position:'fixed', left:'10px', bottom:'10px', zIndex:'30', margin:'0', padding:'10px 12px',
+    maxWidth:'min(720px,calc(100vw - 20px))', maxHeight:'48vh', overflow:'auto', pointerEvents:'none',
+    background:'#071016e8', color:'#d9ffe8', border:'1px solid #5b8b72', borderRadius:'8px',
+    font:'11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace', whiteSpace:'pre-wrap',
+  });
+  document.body.appendChild(panel);
+  return panel;
 };
 const posePoint = point => point && [point.x, point.y, point.z].every(Number.isFinite)
   ? new Vector3(point.x, -point.y, -point.z) : null;
@@ -99,6 +118,8 @@ export class FullBodyAvatar {
     this.lastExpressions = {};
     this.lastGaze = { yaw: 0, pitch: 0 };
     this.lastFaceTime = -Infinity;
+    this.lastDebugFace = null;
+    this.debugPanel = createFaceDebugPanel();
     this.solution = solveBody(null, null);
     this.floorBones = ['leftFoot', 'rightFoot', 'leftToes', 'rightToes'].filter(name => bones[name]);
     this.floorHeight = this.floorBones.length ? Math.min(...this.floorBones.map(name => bones[name].getWorldPosition(new Vector3()).y)) : 0;
@@ -280,6 +301,7 @@ export class FullBodyAvatar {
     this.updateRoot(pose, sampleTime, now, dt, settings);
     this.updateFace(frame.face, faceTime, now, dt, mirrored);
     this.vrm.update(dt);
+    this.renderFaceDebug();
   }
 
   updateRoot(pose, sampleTime, now, dt, settings) {
@@ -322,6 +344,7 @@ export class FullBodyAvatar {
       this.lastExpressions = { ...face.expressions };
       this.lastGaze = { yaw: face.gaze?.yaw ?? 0, pitch: face.gaze?.pitch ?? 0 };
       this.lastFaceTime = sampleTime;
+      this.lastDebugFace = face;
     }
     const holding = now - this.lastFaceTime <= 0.4;
     const motion = { expressions: this.lastExpressions, gaze: this.lastGaze };
@@ -355,8 +378,38 @@ export class FullBodyAvatar {
     }
   }
 
+  renderFaceDebug() {
+    if (!this.debugPanel) return;
+    const face = this.lastDebugFace;
+    const measurement = face?.measurement;
+    const blend = measurement?.blendshapes || {};
+    const manager = this.vrm.expressionManager;
+    const happy = manager?.getExpression('happy');
+    const expressions = manager?.expressions || [];
+    const overrideTotal = expressions.reduce((sum, expression) => sum + (Number(expression.overrideMouthAmount) || 0), 0);
+    const mouthMultiplier = Math.max(0, 1 - overrideTotal);
+    const solver = face?.expressions || {};
+    const weights = Object.fromEntries([...MOUTH_NAMES, 'happy'].map(name => [name, manager?.getValue(name)]));
+    const morphs = Object.fromEntries([...MOUTH_NAMES, 'happy'].map(name => [name, appliedMorphValue(manager?.getExpression(name))]));
+    const line = names => names.map(name => `${name}=${debugNumber(blend[name])}`).join('  ');
+    this.debugPanel.textContent = [
+      'FACE EXPRESSION DEBUG',
+      `tracked=${!!face?.tracked}  mouthOpen=${debugNumber(measurement?.mouthOpen)}  mouthWidth=${debugNumber(measurement?.mouthWidth)}`,
+      `MediaPipe: ${line(['jawOpen','mouthClose','mouthPucker','mouthFunnel'])}`,
+      `           ${line(['mouthSmileLeft','mouthSmileRight','mouthStretchLeft','mouthStretchRight'])}`,
+      `Solver:    ${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(solver[name])}`).join('  ')}`,
+      `VRM weight:${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(weights[name])}`).join('  ')}`,
+      `Morph max: ${[...MOUTH_NAMES,'happy'].map(name => `${name}=${debugNumber(morphs[name])}`).join('  ')}`,
+      `happy overrideMouth=${happy?.overrideMouth ?? '—'}  overrideMouthAmount=${debugNumber(happy?.overrideMouthAmount)}`,
+      `ALL overrideMouth total=${debugNumber(overrideTotal)}  => mouth multiplier=${debugNumber(mouthMultiplier)}`,
+      `happy binds: ${bindMorphNames(happy).join(', ') || '(none)'}`,
+      mouthMultiplier < .999 ? '!!! mouth expressions are being attenuated by VRM overrideMouth !!!' : 'mouth override attenuation: none',
+    ].join('\n');
+  }
+
   dispose() {
     if (!this.vrm) return;
+    this.debugPanel?.remove();
     this.scene.remove(this.vrm.scene);
     VRMUtils.deepDispose(this.vrm.scene);
     this.vrm = null;
