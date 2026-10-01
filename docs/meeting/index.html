@@ -95,6 +95,22 @@
         background: #f6f8fa;
       }
 
+      .warning {
+        margin-top: 14px;
+        padding: 16px 18px;
+        border: 1px solid #d1242f;
+        border-left: 6px solid #d1242f;
+        border-radius: 8px;
+        background: #fff1f1;
+        color: #5d0b12;
+      }
+
+      .warning strong {
+        display: block;
+        margin-bottom: 6px;
+        color: #a40e26;
+      }
+
       .install-preview {
         margin: 12px 0 16px;
       }
@@ -159,13 +175,13 @@
               <figcaption>中央の、モニターに下向き矢印が付いたアイコンがインストールボタンです。</figcaption>
             </figure>
             <p>
-              インストール後にタスクバーやDockへ置いておくと、普段使っているブラウザのウィンドウやタブと混ざらないので便利です。
+              インストール後にタスクバーやDockへ置いておくと、普段使っているブラウザのウィンドウやタブと混ざらないので便利です。VRMCのウィンドウは最大化して使っても構いません。
             </p>
-            <p class="note">
-              <strong>VRMCのウィンドウは最大化して使うのがおすすめです。</strong>
-              ただし、別の最大化ウィンドウでVRMCを完全に覆うと、Chrome側の省リソース処理によって追跡や描画が止まることがあります。
+            <div class="warning" role="note" aria-label="重要な注意事項">
+              <strong>⚠ 重要：VRMCのウィンドウを完全に隠さないでください</strong>
+              別の最大化ウィンドウでVRMCを完全に覆うと、Chrome側の省リソース処理によって追跡や描画が止まることがあります。
               画面共有などで別のウィンドウを前面に出す場合は、VRMCを別モニターに表示するか、手前のウィンドウを少し小さくして、VRMCの一部がディスプレイ上に見える状態にしておいてください。
-            </p>
+            </div>
           </li>
 
           <li>
