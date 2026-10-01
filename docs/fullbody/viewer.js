@@ -7,6 +7,7 @@ import './model-controls.js';
 
 const LIGHTWEIGHT_KEY = 'vrmc.fullbody.lightweight.v1';
 const TRACKING_MODE_KEY = 'vrmc.fullbody.tracking-mode.v1';
+const VIEW_KEY = 'vrmc.fullbody.view.v1';
 
 const readLightweightState = () => {
   try { return JSON.parse(localStorage.getItem(LIGHTWEIGHT_KEY)) || {enabled:false, previous:null}; }
@@ -23,6 +24,19 @@ const readTrackingMode = () => {
 const writeTrackingMode = mode => {
   try { localStorage.setItem(TRACKING_MODE_KEY, mode); }
   catch { /* The mode still works for the current page. */ }
+};
+const validView = view => Array.isArray(view?.position) && view.position.length === 3 && view.position.every(Number.isFinite)
+  && Array.isArray(view?.target) && view.target.length === 3 && view.target.every(Number.isFinite)
+  && (!('fov' in view) || Number.isFinite(view.fov));
+const readView = () => {
+  try {
+    const view = JSON.parse(localStorage.getItem(VIEW_KEY));
+    return validView(view) ? view : null;
+  } catch { return null; }
+};
+const writeView = view => {
+  try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); }
+  catch { /* The view still works for the current page. */ }
 };
 const settingInput = key => document.querySelector(`[data-setting="${key}"]`);
 const updateSettingInput = (input, value) => {
@@ -150,6 +164,8 @@ export class Viewer {
   constructor(stage, {interactive = true, onViewChange = () => {}} = {}) {
     this.stage = stage;
     this.scene = new THREE.Scene();
+    this.persistView = interactive;
+    this.suppressViewPersistence = false;
 
     this.scene.add(new THREE.AmbientLight(0xffffff, .75));
     const lightRig = new THREE.Group();
@@ -178,7 +194,11 @@ export class Viewer {
     this.controls.minDistance = .3;
     this.controls.maxDistance = 15;
     this.controls.update();
-    this.controls.addEventListener('change', () => onViewChange(this.getView()));
+    this.controls.addEventListener('change', () => {
+      const view = this.getView();
+      if (this.persistView && !this.suppressViewPersistence) writeView(view);
+      onViewChange(view);
+    });
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(stage);
     this.generation = 0;
@@ -205,15 +225,21 @@ export class Viewer {
   async load(file) {
     const id = ++this.generation;
     const url = file ? URL.createObjectURL(file) : sampleModels[0].url;
+    const rememberedView = this.persistView ? readView() || (this.avatar ? this.getView() : null) : null;
     let next;
+    this.suppressViewPersistence = true;
     try {
       next = await FullBodyAvatar.load(url, this.scene);
       if (id !== this.generation) { next.dispose(); return false; }
       this.avatar?.dispose();
       this.avatar = next;
       this.fitBust();
+      if (rememberedView) this.setView(rememberedView);
       return true;
-    } finally { if (file) URL.revokeObjectURL(url); }
+    } finally {
+      this.suppressViewPersistence = false;
+      if (file) URL.revokeObjectURL(url);
+    }
   }
   fitBust() {
     if (!this.avatar) return;
@@ -257,9 +283,13 @@ export class Viewer {
   }
   getView() { return {position:this.camera.position.toArray(), target:this.controls.target.toArray(), fov:this.camera.fov}; }
   setView(view) {
-    if (!view?.position?.every(Number.isFinite) || !view?.target?.every(Number.isFinite)) return;
+    if (!validView(view)) return;
     this.camera.position.fromArray(view.position);
     this.controls.target.fromArray(view.target);
+    if (Number.isFinite(view.fov)) {
+      this.camera.fov = THREE.MathUtils.clamp(view.fov, 10, 100);
+      this.camera.updateProjectionMatrix();
+    }
     this.controls.update();
   }
   getPose() {
