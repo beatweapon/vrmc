@@ -94,6 +94,57 @@
         border-left: 4px solid #6e7781;
         background: #f6f8fa;
       }
+
+      .warning {
+        margin-top: 14px;
+        padding: 16px 18px;
+        border: 1px solid #d1242f;
+        border-left: 6px solid #d1242f;
+        border-radius: 8px;
+        background: #fff1f1;
+        color: #5d0b12;
+      }
+
+      .warning strong {
+        display: block;
+        margin-bottom: 6px;
+        color: #a40e26;
+      }
+
+      .install-preview {
+        margin: 12px 0 16px;
+      }
+
+      .install-preview img {
+        display: block;
+        width: 174px;
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+      }
+
+      .install-preview figcaption,
+      .vroid-preview figcaption {
+        margin-top: 8px;
+        color: #57606a;
+        font-size: 0.9rem;
+      }
+
+      .vroid-preview {
+        margin: 20px 0 0;
+      }
+
+      .vroid-preview a {
+        display: block;
+      }
+
+      .vroid-preview img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border: 1px solid #d8dee4;
+        border-radius: 10px;
+      }
     </style>
   </head>
   <body>
@@ -115,23 +166,23 @@
               <a href="https://beatweapon.github.io/vrmc/fullbody/">VRMC fullbody</a>
               を開き、アドレスバーに表示されるインストールボタンからアプリとしてインストールします。
             </p>
+            <figure class="install-preview">
+              <img
+                src="./chrome-install-button.png"
+                alt="Chromeのアドレスバーに表示されるインストールボタン"
+                loading="lazy"
+              />
+              <figcaption>中央の、モニターに下向き矢印が付いたアイコンがインストールボタンです。</figcaption>
+            </figure>
             <p>
               インストール後にタスクバーやDockへ置いておくと、普段使っているブラウザのウィンドウやタブと混ざらないので便利です。
+              <strong>VRMCのウィンドウは最大化して使うのがおすすめです。</strong>
             </p>
-          </li>
-
-          <li>
-            <h2>会議向けのトラッキングモードを選ぶ</h2>
-            <p>
-              設定画面の「トラッキングモード」から、用途に合わせて <strong>Full Body</strong> または <strong>Face Only</strong> を選びます。
-            </p>
-            <ul>
-              <li><strong>Full Body</strong>：顔・体・手指を追跡します。手振りや姿勢も見せたいときに向いています。</li>
-              <li><strong>Face Only</strong>：顔だけを追跡し、体・手の追跡処理を止めます。会議中の負荷を抑えたいときに向いています。</li>
-            </ul>
-            <p class="note">
-              OBSやZoomなどを同時に使って重く感じる場合は、配信画面右下の羽アイコンから<strong>軽量モード</strong>をONにしてください。追跡・描画の負荷をまとめて下げられます。
-            </p>
+            <div class="warning" role="note" aria-label="重要な注意事項">
+              <strong>⚠ 重要：VRMCのウィンドウを完全に隠さないでください</strong>
+              別の最大化ウィンドウでVRMCを完全に覆うと、Chrome側の省リソース処理によって追跡や描画が止まることがあります。
+              画面共有などで別のウィンドウを前面に出す場合は、VRMCを別モニターに表示するか、手前のウィンドウを少し小さくして、VRMCの一部がディスプレイ上に見える状態にしておいてください。
+            </div>
           </li>
 
           <li>
@@ -153,6 +204,16 @@
               会議ツールのカメラ設定を開き、「OBS Virtual Camera」を選択します。これでVRMアバターをカメラ映像として使えます。
             </p>
           </li>
+
+          <li>
+            <h2>重い場合はトラッキング設定を調整する</h2>
+            <p class="note">
+              OBSやZoomなどを同時に使って重く感じる場合は、まず配信画面右下の羽アイコンから<strong>軽量モード</strong>をONにしてください。追跡・描画の負荷をまとめて下げられます。
+            </p>
+            <p>
+              軽量モードにしてもまだ重い場合は、設定画面の「トラッキングモード」から <strong>Face Only</strong> に切り替えてみてください。顔だけを追跡し、体・手の追跡処理を止めるため、さらに負荷を下げられます。
+            </p>
+          </li>
         </ol>
       </section>
 
@@ -163,6 +224,16 @@
           <a href="https://vroid.com/studio" target="_blank" rel="noopener">VRoid Studio</a>
           がおすすめです。作成したVRMファイルをVRMC fullbodyへ読み込めば、そのまま会議用アバターとして使えます。
         </p>
+        <figure class="vroid-preview">
+          <a href="https://vroid.com/studio" target="_blank" rel="noopener">
+            <img
+              src="./vroid-studio.webp"
+              alt="VRoid Studioでアバターの髪型を編集している画面"
+              loading="lazy"
+            />
+          </a>
+          <figcaption>VRoid Studioでは髪型・顔・衣装などを編集してオリジナルアバターを作れます。クリックすると公式サイトを開きます。</figcaption>
+        </figure>
       </section>
 
       <section>
