@@ -1,7 +1,9 @@
 {
   "name": "vrmc",
   "short_name": "vrmc",
-  "start_url": "./index.html",
+  "id": "/vrmc/",
+  "start_url": "/vrmc/",
+  "scope": "/vrmc/",
   "display": "fullscreen",
   "background_color": "#ffffff",
   "theme_color": "#000000",
