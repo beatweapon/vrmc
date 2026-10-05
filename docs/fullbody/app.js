@@ -590,7 +590,6 @@ async function init() {
       const url = new URL(location.href); url.searchParams.delete('sample');
       history.replaceState(null,'',url);
     }
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('../service-worker.js').catch(()=>{});
     // A manual start/cancel during model loading overrides automatic startup.
     if (viewer.avatar && cameraGeneration === 0 && !running && !starting) await startCamera();
   } catch(error) {
